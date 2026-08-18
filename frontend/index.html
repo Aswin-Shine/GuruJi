@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- viewport-fit=cover + the safe-area insets in styles.css keep the composer
+         clear of the iOS home indicator and Android gesture bar. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#161826" />
+
+    <title>GuruJi</title>
+    <meta
+      name="description"
+      content="A Hinglish tutoring companion for Class 5-10 NCERT students. Answers come from your own textbook, or GuruJi says it does not know."
+    />
+
+    <!-- No <link> to any third-party origin. Google Fonts would leak every child's
+         IP address to a third party on page load and would force font-src to allow
+         an external host in the CSP. The type stack is system-native instead. -->
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+
+    <!-- Referrer and CSP are set as real HTTP headers by nginx (see nginx.conf).
+         Headers beat <meta> because they also cover non-HTML responses. -->
+  </head>
+  <body>
+    <!-- Skip link: the chat transcript can be long; a keyboard or screen-reader
+         user must be able to jump straight to the composer. -->
+    <a class="skip" href="#composer">Skip to the message box</a>
+    <div id="app"></div>
+    <noscript>
+      <div class="noscript">
+        <p><strong>GuruJi needs JavaScript switched on.</strong></p>
+        <p>
+          Turn it on in your browser settings and reload this page. You can also
+          message GuruJi on WhatsApp instead — same tutor, same textbook.
+        </p>
+      </div>
+    </noscript>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

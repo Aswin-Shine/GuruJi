@@ -1,0 +1,4 @@
+# The app is behind sign-in and has nothing crawlable. Keeping student-facing
+# URLs out of search results is deliberate, not an SEO oversight.
+User-agent: *
+Disallow: /

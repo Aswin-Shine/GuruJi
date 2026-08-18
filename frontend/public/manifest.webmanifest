@@ -1,0 +1,15 @@
+{
+  "name": "GuruJi",
+  "short_name": "GuruJi",
+  "description": "A Hinglish tutoring companion for Class 5-10 NCERT students.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#161826",
+  "theme_color": "#161826",
+  "lang": "en-IN",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

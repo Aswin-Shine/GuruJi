@@ -1,0 +1,30 @@
+{
+  "name": "guruji-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "GuruJi web client — Class 5-10 NCERT tutoring, Phase 1.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "audit:ci": "npm audit --audit-level=high --omit=dev"
+  },
+  "dependencies": {
+    "preact": "10.28.2"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vite": "8.1.5"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "browserslist": [
+    "chrome >= 111",
+    "firefox >= 128",
+    "safari >= 16.4",
+    "android >= 111"
+  ]
+}
