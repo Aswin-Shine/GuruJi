@@ -1,0 +1,14 @@
+# Runtime dependencies only. Anything needed solely for tests or linting belongs
+# in requirements-dev.txt so it never reaches the production image.
+fastapi==0.115.*
+uvicorn[standard]==0.30.*
+sqlalchemy==2.0.*
+psycopg2-binary==2.9.*
+openai==1.*
+httpx==0.27.*
+python-dotenv==1.*
+
+# Used by scripts/ingest_curriculum.py, which is run *inside* the api container
+# against a bind mount — so it has to be present in the image even though the
+# script itself is not copied into it.
+pypdf==4.*

@@ -1,0 +1,33 @@
+# Tooling configuration only. This project is not packaged or published; the
+# deployable is a Docker image, so there is no [project] or [build-system] table.
+
+[tool.ruff]
+line-length = 110
+target-version = "py313"
+
+[tool.ruff.lint]
+# Deliberately narrow. The rule set is chosen to catch the failure class this
+# codebase has actually shipped — an undefined name left behind by a botched
+# string replacement, which `python -m py_compile` does not catch — not to
+# enforce a house style on working code.
+#
+#   F    pyflakes: undefined names, unused imports, f-strings missing placeholders
+#   E9   syntax and IO errors only (E1/E2/E7 whitespace rules are noise here)
+#
+# Not enabled, and why:
+#   B008  flags FastAPI's `Depends()` in a default argument, which is the
+#         framework's documented idiom. It would fire ~25 times on correct code.
+#   UP    cosmetic modernisation of working code; churn without a bug behind it.
+#   I     import sorting; worth adopting, but as its own commit, not silently here.
+select = ["F", "E9"]
+
+[tool.ruff.lint.per-file-ignores]
+# `import _bootstrap` exists solely for its sys.path side effect (see that
+# module's docstring). It is unused by definition, and deleting it breaks the
+# script. E402 likewise: the path must be set up before `app.*` is importable.
+"scripts/*.py" = ["E402", "F401"]
+"tests/conftest.py" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

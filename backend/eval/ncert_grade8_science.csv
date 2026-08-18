@@ -1,0 +1,244 @@
+id,question,context,grade,gold_chapter,kind
+# GuruJi retrieval eval set v4 — Classes 5-10, Science (+ Class 5 EVS).
+#
+# Columns: id, question, context, grade, gold_chapter, kind
+#   grade         the class the STUDENT is in when asking. Read per row, not from
+#                 --grade, so one file can test all six classes at once.
+#   gold_chapter  chapter that must be retrieved; >0 in-corpus, 0 non-question,
+#                 -1 genuinely absent from the corpus.
+#
+# CHANGELOG v3 -> v4 (after ingesting classes 8,9,10,6,7 — 3,511 chunks)
+#   * RELABELLED, not deleted: five rows stopped being out-of-corpus once classes
+#     6/7 landed. Each is now a recall row against the chapter that genuinely
+#     covers it, verified by grepping the ingested PDFs rather than assumed:
+#       coal/petroleum  -> class 6 ch11 Nature's Treasures         (19 hits)
+#       photosynthesis  -> class 7 ch10 Life Processes in Plants   (36 hits)
+#       digestion       -> class 7 ch09 Life Processes in Animals  (57 hits)
+#       excretion       -> class 7 ch09 Life Processes in Animals
+#       pH / alkali     -> class 7 ch02 Acidic, Basic, and Neutral (23 hits)
+#     Deleting them would have thrown away five working test cases; relabelling
+#     keeps them measuring, just a different thing.
+#   * TWO GOLD LABELS CORRECTED. 'namak aur reth ko alag kaise karein' and
+#     'mixture ko kaise separate karte hain' were labelled class 8 ch08. Class 6
+#     ch09 'Methods of Separation in Everyday Life' owns that topic outright, and
+#     retrieval was landing there at 0.59-0.68 while the eval scored it a miss.
+#     The pass-1 miss followed by a correct pass-2 hit is two-pass working; the
+#     eval was wrong, not the system.
+#   * NEW kind: cross_class. The same question asked as different classes, with
+#     different gold chapters. v3 could not test this at all, which meant nothing
+#     in it could actually prove two-pass — only fail to disprove it.
+1,Science mein experiment kaise karte hain?,,8,1,hinglish
+2,What is a hypothesis in science?,,8,1,direct
+3,observation aur inference mein kya difference hai,,8,1,hinglish
+4,scientific method ke steps batao,,8,1,hinglish
+5,why do we do experiments in science,,8,1,direct
+6,microorganisms kya hote hain?,,8,2,hinglish
+7,What is a cell made of?,,8,2,direct
+8,microscope se kya dikhta hai,,8,2,hinglish
+9,bacteria good hote hain ya bad,,8,2,hinglish
+10,types of microorganisms,,8,2,direct
+11,communicable disease kya hai?,,8,3,hinglish
+12,How do antibiotics work?,,8,3,direct
+13,smallpox kaise khatam hua,,8,3,hinglish
+14,bimari kaise failti hai,,8,3,hinglish
+15,what is a healthy lifestyle,,8,3,direct
+16,electric current kya hota hai?,,8,4,hinglish
+17,How does an electromagnet work?,,8,4,direct
+18,compass needle kyun ghumti hai current ke paas,,8,4,hinglish
+19,heating effect of electric current,,8,4,direct
+20,battery aur cell mein difference,,8,4,hinglish
+21,force kya hota hai?,,8,5,hinglish
+22,contact and non contact forces,,8,5,direct
+23,weight aur mass same hai kya,,8,5,hinglish
+24,spring balance se kya measure karte hain,,8,5,hinglish
+25,friction kaam kaise karta hai,,8,5,hinglish
+26,pressure kya hotha hai ?,,8,6,typo
+27,Pressure = Force / Area formula samjhao,,8,6,hinglish
+28,cyclone kaise banta hai,,8,6,hinglish
+29,why is the base of a dam broader than the top,,8,6,direct
+30,atmospheric pressure hume crush kyun nahi karta,,8,6,hinglish
+31,matter particles se bana hota hai kya?,,8,7,hinglish
+32,interparticle spaces in solids liquids and gases,,8,7,direct
+33,chini paani mein kyun ghul jaati hai,,8,7,hinglish
+34,solid ka shape fixed kyun hota hai,,8,7,hinglish
+35,what holds particles of matter together,,8,7,direct
+36,element compound aur mixture mein difference,,8,8,hinglish
+37,What is a chemical symbol?,,8,8,direct
+38,water hydrogen aur oxygen se banta hai na,,8,8,hinglish
+39,mixture ko kaise separate karte hain,,6,9,hinglish
+40,examples of compounds,,8,8,direct
+41,solute aur solvent kya hai?,,8,9,hinglish
+42,How do you calculate density?,,8,9,direct
+43,measuring cylinder se volume kaise nikalte hain,,8,9,hinglish
+44,saturated solution matlab kya,,8,9,hinglish
+45,why do some objects float in water,,8,9,direct
+46,concave aur convex mirror mein difference kya hai,,8,10,hinglish
+47,What is the law of reflection?,,8,10,direct
+48,plane mirror mein image kaisi banti hai,,8,10,hinglish
+49,lens light ko kaise bend karta hai,,8,10,hinglish
+50,real and virtual image difference,,8,10,direct
+51,chand ki phases kyun badalti hain?,,8,11,hinglish
+52,What is the difference between a lunar and solar calendar?,,8,11,direct
+53,ek saal mein 365 din kyun hote hain,,8,11,hinglish
+54,moon ka cycle kitne din ka hota hai,,8,11,hinglish
+55,how do we keep time using the sky,,8,11,direct
+56,ecosystem kya hota hai?,,8,12,hinglish
+57,biotic and abiotic components examples,,8,12,direct
+58,habitat aur population mein kya farak hai,,8,12,hinglish
+59,plants aur animals ek dusre pe kaise depend karte hain,,8,12,hinglish
+60,what is a food chain,,8,12,direct
+61,Earth pe hi life kyun hai?,,8,13,hinglish
+62,What does the atmosphere do for us?,,8,13,direct
+63,paani life ke liye zaroori kyun hai,,8,13,hinglish
+64,Earth ka temperature life ke liye suitable kyun hai,,8,13,hinglish
+65,why is earth called a unique planet,,8,13,direct
+66,samajh nahi aaya,"student: pressure kya hota hai?
+assistant: Yeh toh easy hai! Pressure matlab force per unit area. Formula: Pressure = Force / Area. Agar area badhe toh pressure badhega ya ghatega?",8,6,followup
+67,aur example do,"student: concave mirror kya hai?
+assistant: Concave mirror andar ki taraf curved hota hai, jaise spoon ka andar wala side. Kahan use hota hai bataoge?",8,10,followup
+68,iska formula kya hai,"student: density ke baare mein batao
+assistant: Density matlab kitna maal kitni jagah mein bhara hai. Socho ek kilo rui aur ek kilo loha!",8,9,followup
+69,thoda aur simple karke batao,"student: electromagnet kaise kaam karta hai?
+assistant: Jab coil mein current jaata hai toh magnet ban jaata hai. Coil ke paas compass rakhoge toh kya hoga?",8,4,followup
+70,answer this in english,"student: pressure kya hotha hai ?
+assistant: Yeh toh easy hai! Pressure force acting on a unit area. Jaise nail ki tip chhoti hoti hai, isliye woh wall mein aasani se ghusti hai.",8,0,nonsearch
+71,hello bhaiya,,8,0,nonsearch
+72,thank you so much,,8,0,nonsearch
+73,ghatega,"student: pressure kya hota hai?
+assistant: Agar area badh jaaye, pressure badhega ya ghatega?",8,0,nonsearch
+74,tum kaun ho,,8,0,nonsearch
+75,hindi mein samjhao,"student: what is friction?
+assistant: Friction is the force that opposes motion between two surfaces.",8,0,nonsearch
+77,quantum entanglement kya hai,,8,-1,out_of_corpus
+#
+# VOCAB-FREE / ADJACENT / FOLLOWUP / NONSEARCH / OUT-OF-CORPUS — see v3 notes.
+79,cycle ka tyre pichak jaaye toh hawa kahan jaati hai,,8,6,vocab_free
+80,nail ki nok patli kyun banate hain,,8,6,vocab_free
+81,chhat ud kyun jaati hai tez hawa mein,,8,6,vocab_free
+82,badal garajne ke baad chamak kyun dikhti hai pehle,,8,6,vocab_free
+83,cycle chalana band karo toh apne aap ruk kyun jaati hai,,8,5,vocab_free
+84,bhaari bag uthane mein zyada zor kyun lagta hai,,8,5,vocab_free
+85,chammach ka andar wala side ulta kyun dikhata hai,,8,10,vocab_free
+86,sheeshe mein mera left haath right kyun lagta hai,,8,10,vocab_free
+87,chand kabhi poora kabhi aadha kyun,,8,11,vocab_free
+88,har chauthe saal ek din extra kyun aata hai,,8,11,vocab_free
+89,chai mein zyada cheeni daalo toh neeche kyun baith jaati hai,,8,9,vocab_free
+90,garam paani mein cheeni jaldi kyun ghulti hai,,8,9,vocab_free
+91,lakdi paani pe tairti hai lekin patthar doob jaata hai kyun,,8,9,vocab_free
+92,keel ke around waayar lapet ke current do toh kya hota hai,,8,4,vocab_free
+93,bread pe safed safed kya ug jaata hai,,8,2,vocab_free
+94,haath dho ke khana kyun khana chahiye,,8,3,vocab_free
+95,"ghas ko keeda khata hai keede ko chidiya, iska naam kya hai",,8,12,vocab_free
+96,sooraj ki tez kirno se hume kaun bachata hai,,8,13,vocab_free
+97,bag ka strap chauda kyun hota hai,,8,6,adjacent
+98,hawa hume dhakka kaise deti hai,,8,6,adjacent
+99,namak paani mein ghulne par kahan chala jaata hai,,8,9,adjacent
+100,namak aur reth ko alag kaise karein,,6,9,adjacent
+101,paani ke particles ke beech jagah hoti hai kya,,8,7,adjacent
+102,chumbak ki sooi north kyun dikhati hai,,8,4,adjacent
+103,taar mein current se chumbak kaise ban jaata hai,,8,4,adjacent
+104,jeev aur unke aas paas ka rishta,,8,12,adjacent
+105,hawa ki chaadar Earth ko kaise bachati hai,,8,13,adjacent
+106,cheeni ghul gayi matlab woh khatam ho gayi kya,,8,9,adjacent
+107,paani ka volume kaise naapte hain,,8,9,adjacent
+108,chumbak wala crane loha kaise uthata hai,,8,4,adjacent
+109,aur,"student: ecosystem kya hai?
+assistant: Ecosystem matlab jeev aur unka aas-paas milkar ek system. Kaunse do hisse hote hain bata sakte ho?
+student: pata nahi
+assistant: Biotic (jeev) aur abiotic (non-jeev). Ek example socho!",8,12,followup
+110,woh dobara batao,"student: saturated solution kya hai?
+assistant: Jab solute ghulna band kar de aur neeche baithne lage. Temperature badalne se kya hoga?
+student: badh jayega
+assistant: Bilkul sahi!",8,9,followup
+111,iska ek aur example,"student: non-contact force kya hoti hai?
+assistant: Jo bina chhue kaam kare, jaise magnet. Ek aur socho?",8,5,followup
+112,is chapter ka formula,"student: mujhe pressure wala chapter padhna hai
+assistant: Achha! Pressure ke baare mein kya jaanna hai?",8,6,followup
+113,ok samajh gaya thanks bhaiya,,8,0,nonsearch
+114,ek minute ruko,,8,0,nonsearch
+115,isko point mein likh do,"student: friction kya hai?
+assistant: Friction woh force hai jo do surfaces ke beech motion ko rokta hai.",8,0,nonsearch
+116,aur chhota karke,"student: cyclone kaise banta hai?
+assistant: Garam samundar se hawa upar uthti hai, low pressure banta hai, aur aas paas ki hawa ghoomti hui aati hai.",8,0,nonsearch
+117,badhega,assistant: agar area kam ho jaaye toh pressure badhega ya ghatega?,8,0,nonsearch
+118,kal exam hai bahut tension ho rahi,,8,0,nonsearch
+119,tumhara naam GuruJi kyun hai,,8,0,nonsearch
+120,31,"assistant: 62 ko 2 se divide karo, kitna aaya?",8,0,nonsearch
+121,coal aur petroleum kaise bante hain,,6,11,covered
+122,photosynthesis ka process samjhao,,7,10,covered
+123,periodic table mein kitne elements hain,,8,-1,out_of_corpus
+124,trigonometry ka sin cos tan kya hota hai,,8,-1,out_of_corpus
+125,Mughal empire kisne banaya tha,,8,-1,out_of_corpus
+126,quadratic equation kaise solve karte hain,,8,-1,out_of_corpus
+127,human digestive system ke parts,,7,9,covered
+128,Indian constitution kab bana tha,,8,-1,out_of_corpus
+130,algebra mein x ki value kaise nikalte hain,,8,-1,out_of_corpus
+131,quadratic equation solve karne ka formula,,8,-1,out_of_corpus
+132,pythagoras theorem kya kehta hai,,8,-1,out_of_corpus
+133,sin cos tan ka matlab kya hota hai,,8,-1,out_of_corpus
+134,percentage nikalne ka tarika batao,,8,-1,out_of_corpus
+135,LCM aur HCF mein difference,,8,-1,out_of_corpus
+136,circle ka area kaise nikalte hain,,8,-1,out_of_corpus
+137,probability kya hoti hai,,8,-1,out_of_corpus
+138,linear equation in two variables samjhao,,8,-1,out_of_corpus
+139,compound interest ka formula,,8,-1,out_of_corpus
+140,democracy kya hoti hai,,8,-1,out_of_corpus
+141,panchayati raj system kaise kaam karta hai,,8,-1,out_of_corpus
+143,1857 ki kranti kyun hui thi,,8,-1,out_of_corpus
+144,Gandhi ji ne kaun se andolan chalaye,,8,-1,out_of_corpus
+145,parliament mein kitne house hote hain,,8,-1,out_of_corpus
+146,latitude aur longitude kya hai,,8,-1,out_of_corpus
+147,Harappa civilisation ke baare mein batao,,8,-1,out_of_corpus
+148,present perfect tense ke examples do,,8,-1,out_of_corpus
+149,active aur passive voice mein badlo kaise,,8,-1,out_of_corpus
+150,formal letter ka format kya hota hai,,8,-1,out_of_corpus
+151,noun ke kitne prakar hote hain,,8,-1,out_of_corpus
+152,muhavare aur lokoktiyan mein antar,,8,-1,out_of_corpus
+153,sandhi viched kaise karte hain,,8,-1,out_of_corpus
+154,kavita ka bhavarth kaise likhein,,8,-1,out_of_corpus
+156,cell division ka process kya hai,,8,-1,out_of_corpus
+157,sound ek jagah se doosri jagah kaise pahunchti hai,,8,-1,out_of_corpus
+158,nervous system ka kaam kya hai,,8,-1,out_of_corpus
+159,skeleton system mein kitni haddiyan hoti hain,,8,-1,out_of_corpus
+160,velocity aur acceleration mein farak,,8,-1,out_of_corpus
+161,momentum kya hota hai,,8,-1,out_of_corpus
+162,excretion ka matlab kya hai,,7,9,covered
+163,alkali aur acid ka pH kya hota hai,,7,2,covered
+#
+# CROSS-CLASS: identical question, different student, different correct chapter.
+# A system that ignores the student's class will score ~1/n here by luck. A system
+# that always answers from the lowest class will score only the lowest-class rows.
+# This is the category to watch as classes are added.
+164,light kaise reflect hoti hai,,7,11,cross_class
+165,light kaise reflect hoti hai,,8,10,cross_class
+166,light kaise reflect hoti hai,,10,9,cross_class
+167,mirror mein image kaise banti hai,,7,11,cross_class
+168,mirror mein image kaise banti hai,,8,10,cross_class
+169,mirror mein image kaise banti hai,,10,9,cross_class
+170,electricity circuit kaise kaam karta hai,,7,3,cross_class
+171,electricity circuit kaise kaam karta hai,,8,4,cross_class
+172,electricity circuit kaise kaam karta hai,,10,11,cross_class
+173,magnet kaise kaam karta hai,,6,4,cross_class
+174,magnet kaise kaam karta hai,,10,12,cross_class
+175,force kya hoti hai,,8,5,cross_class
+176,force kya hoti hai,,9,6,cross_class
+177,motion ko kaise describe karte hain,,6,5,cross_class
+178,motion ko kaise describe karte hain,,7,8,cross_class
+179,motion ko kaise describe karte hain,,9,4,cross_class
+180,matter particles se bana hai kya,,8,7,cross_class
+181,matter particles se bana hai kya,,9,9,cross_class
+182,mixture alag kaise karein,,6,9,cross_class
+183,mixture alag kaise karein,,9,5,cross_class
+184,temperature kaise naapte hain,,6,7,cross_class
+185,temperature kaise naapte hain,,7,7,cross_class
+186,acid aur base mein difference,,7,2,cross_class
+187,acid aur base mein difference,,10,2,cross_class
+188,metals ke properties kya hain,,7,4,cross_class
+189,metals ke properties kya hain,,10,3,cross_class
+190,chand aur sooraj ka movement,,6,12,cross_class
+191,chand aur sooraj ka movement,,7,12,cross_class
+192,chand aur sooraj ka movement,,8,11,cross_class
+193,plants apna khana kaise banate hain,,7,10,cross_class
+194,plants apna khana kaise banate hain,,10,5,cross_class
+195,reproduction kaise hota hai,,9,11,cross_class
+196,reproduction kaise hota hai,,10,7,cross_class

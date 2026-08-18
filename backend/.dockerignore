@@ -1,0 +1,29 @@
+# The runtime image only needs `app/` (see Dockerfile: `COPY app ./app`). Everything
+# else is excluded so it never reaches the Docker daemon, which keeps builds fast and
+# makes a future `COPY . .` incapable of leaking a secret.
+
+.env
+.env.*
+!.env.example
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+venv/
+
+.git/
+.gitignore
+.DS_Store
+
+# Operator tooling and fixtures. These are run against a bind mount (see
+# IMPLEMENTATION.md) so they always execute the code on disk rather than a stale
+# copy baked into an image.
+tests/
+eval/
+manifests/
+scripts/
+Dockerfile
