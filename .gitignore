@@ -1,0 +1,45 @@
+# ---- secrets ----------------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# ---- source corpus ----------------------------------------------------------
+# NCERT PDFs are not redistributed with this repository. See README §The corpus.
+Books/
+*.pdf
+
+# ---- python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- node / vite ------------------------------------------------------------
+node_modules/
+dist/
+
+# ---- docker / runtime -------------------------------------------------------
+pgdata/
+*.log
+
+# ---- os ---------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+
+# ---- terraform --------------------------------------------------------------
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
