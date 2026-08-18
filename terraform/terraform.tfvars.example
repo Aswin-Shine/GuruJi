@@ -1,0 +1,19 @@
+# Copy to terraform.tfvars and adjust. terraform.tfvars is gitignored.
+
+project     = "guruji"
+environment = "pilot"
+aws_region  = "ap-south-1"
+
+# c7i-flex.large (4 GB) fits the stack with headroom and is free-tier eligible
+# for accounts created on or after 2025-07-15. m7i-flex.large (8 GB) is also
+# eligible but burns credits ~19% faster for memory this workload cannot use.
+instance_type    = "c7i-flex.large"
+root_volume_size = 30
+
+# Leave 0.0.0.0/0 on port 80 or Let's Encrypt's HTTP-01 challenge cannot reach
+# Caddy and certificate issuance and renewal both fail.
+allowed_http_cidrs = ["0.0.0.0/0"]
+
+extra_tags = {
+  Owner = "founder"
+}

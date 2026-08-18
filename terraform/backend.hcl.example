@@ -1,0 +1,11 @@
+# Copy to backend.hcl, set your bucket, then:  terraform init -backend-config=backend.hcl
+
+bucket = "guruji-tfstate-CHANGE-ME"
+key    = "pilot/terraform.tfstate"
+region = "ap-south-1"
+
+encrypt = true
+
+# Native S3 state locking (Terraform >= 1.10). Replaces the DynamoDB table the
+# older pattern required — one less resource to create, pay for and bootstrap.
+use_lockfile = true
