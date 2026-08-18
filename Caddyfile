@@ -1,0 +1,90 @@
+# =============================================================================
+#  Caddy — TLS terminator and pilot access gate.
+#
+#  Used with docker-compose.caddy.yml. Caddy obtains and renews a Let's Encrypt
+#  certificate automatically; nothing else in this stack speaks HTTPS.
+#
+#  WHY THE GATE EXISTS
+#  The pilot runs with DEV_OTP_BYPASS on, which means the universal code 000000
+#  is accepted for ANY phone number. Without a gate in front, anyone who reaches
+#  the hostname can type a student's number and read that child's transcripts.
+#  A hostname is not a secret: every certificate Caddy issues is published to
+#  public Certificate Transparency logs within seconds, and those logs are
+#  continuously scraped.
+#
+#  This gate is a BRIDGE, not a destination. It reduces the exposure from
+#  "anyone on the internet" to "anyone holding the shared password". Replace it
+#  with per-phone codes and APP_ENV=production before the cohort grows.
+# =============================================================================
+
+{
+	# Where Let's Encrypt sends expiry warnings. A real address you read.
+	email {$ACME_EMAIL}
+
+	# Uncomment for the FIRST deploy. The staging CA issues untrusted certs (the
+	# browser will warn) but has far looser failure limits, so a misconfigured
+	# DNS record or a closed port 80 costs nothing. Comment out and
+	# `docker compose restart caddy` once you have seen it succeed.
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+{$GURUJI_HOSTNAME} {
+	encode zstd gzip
+
+	# ---- the gate ----------------------------------------------------------
+	#
+	# Basic auth is applied to two of the three request classes, deliberately:
+	#
+	#   @site      everything that is not the API — the HTML, JS, CSS. Blocks a
+	#              stranger from ever loading the app.
+	#   @authapi   /api/v1/auth/* — the OTP endpoints. THIS is the class that
+	#              can create or take over an account, so it must be gated even
+	#              though it is under /api.
+	#   (rest)     every other /api/* call. NOT gated here, because it already
+	#              requires a valid bearer token issued by the backend.
+	#
+	# That last exclusion is not laziness, it is required for correctness. The
+	# app sends `Authorization: Bearer <token>` on those calls, which REPLACES
+	# the browser's cached `Authorization: Basic` credentials. Gating them would
+	# make Caddy reject every authenticated request and the app would appear
+	# completely broken after login. The two OTP endpoints are the only ones the
+	# client calls with `auth: false`, so they carry no Authorization header of
+	# their own and the browser's Basic credentials pass through cleanly.
+	
+	@site not path /api/*
+	@authapi path /api/v1/auth/*
+
+	basic_auth @site {
+		{$GURUJI_PILOT_USER} {$GURUJI_PILOT_PASSWORD_HASH}
+	}
+	basic_auth @authapi {
+		{$GURUJI_PILOT_USER} {$GURUJI_PILOT_PASSWORD_HASH}
+	}
+
+	# ---- upstream ----------------------------------------------------------
+	# nginx listens on 8080 inside the container, not 80. It owns all routing,
+	# security headers, rate limiting and the /api prefix rewrite — Caddy
+	# deliberately does none of that, so there is one place those rules live.
+	# X-Forwarded-Proto/Host are NOT set explicitly here: Caddy sends them by
+	# default, and `caddy validate` warns that restating them is redundant. The
+	# backend runs uvicorn with --proxy-headers, so it reads them and knows the
+	# original request was HTTPS.
+	reverse_proxy web:8080 {
+		# Longer than the app's own ~10s model timeout plus one retry, so a slow
+		# tutoring turn is answered rather than cut off at the proxy.
+		transport http {
+			read_timeout 60s
+		}
+	}
+
+	# Matches nginx's own client_max_body_size 32k. Messages are text and capped
+	# at 2000 characters server-side; there are no uploads anywhere in this app.
+	request_body {
+		max_size 64KB
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}
