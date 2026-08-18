@@ -36,6 +36,13 @@ compose() {
   else docker-compose "$@"; fi
 }
 
+
+db_exec() {
+  local tool="$1"; shift
+  compose exec -T "$DB_SERVICE" \
+    sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" exec "$@"' _ "$tool" -U "$DB_USER" -d "$DB_NAME" "$@"
+}
+
 require_db() {
   compose ps --status running --services 2>/dev/null | grep -qx "$DB_SERVICE" \
     || die "the '$DB_SERVICE' service is not running. Start the stack first."
@@ -43,7 +50,7 @@ require_db() {
 
 status() {
   require_db
-  compose exec -T "$DB_SERVICE" psql -U "$DB_USER" -d "$DB_NAME" -q -c "
+  db_exec psql -q -c "
     SELECT d.grade,
            d.subject,
            count(DISTINCT d.id) AS chapters,
@@ -59,8 +66,7 @@ do_export() {
   require_db
 
   local chunks
-  chunks=$(compose exec -T "$DB_SERVICE" psql -U "$DB_USER" -d "$DB_NAME" -tA \
-             -c "SELECT count(*) FROM curriculum_chunks" | tr -d '\r')
+  chunks=$(db_exec psql -tA -c "SELECT count(*) FROM curriculum_chunks" | tr -d '\r')
   [ "$chunks" -gt 0 ] || die "the corpus is empty — nothing to export. Ingest first."
 
   local args=()
@@ -70,8 +76,7 @@ do_export() {
   # -Z9  the vectors are float text and compress ~2.6x
   # --data-only  the target's own init_db() owns the schema; shipping DDL from a
   #              laptop would let a stale local schema overwrite the server's
-  compose exec -T "$DB_SERVICE" pg_dump -U "$DB_USER" -d "$DB_NAME" \
-    --data-only --no-owner -Fc -Z9 "${args[@]}" > "$out"
+  db_exec pg_dump --data-only --no-owner -Fc -Z9 "${args[@]}" > "$out"
 
   echo "exported $chunks chunks -> $out ($(du -h "$out" | cut -f1))"
   echo "transfer with:  scp $out <user>@<host>:~/"
@@ -83,8 +88,7 @@ do_import() {
   require_db
 
   local existing
-  existing=$(compose exec -T "$DB_SERVICE" psql -U "$DB_USER" -d "$DB_NAME" -tA \
-               -c "SELECT count(*) FROM curriculum_chunks" | tr -d '\r')
+  existing=$(db_exec psql -tA -c "SELECT count(*) FROM curriculum_chunks" | tr -d '\r')
 
   # --data-only APPENDS. Importing over a populated corpus silently doubles
   # every chapter, and doubled chunks skew retrieval rather than erroring.
@@ -94,13 +98,11 @@ do_import() {
     echo "distort retrieval without producing an error."
     read -r -p "Truncate the existing corpus first? [y/N] " reply
     [[ "$reply" =~ ^[Yy]$ ]] || die "aborted; nothing changed."
-    compose exec -T "$DB_SERVICE" psql -U "$DB_USER" -d "$DB_NAME" -q -c \
-      "TRUNCATE curriculum_chunks, curriculum_documents RESTART IDENTITY CASCADE;"
+    db_exec psql -q -c "TRUNCATE curriculum_chunks, curriculum_documents RESTART IDENTITY CASCADE;"
     echo "existing corpus cleared."
   fi
 
-  compose exec -T "$DB_SERVICE" pg_restore -U "$DB_USER" -d "$DB_NAME" \
-    --data-only --no-owner < "$in"
+  db_exec pg_restore --data-only --no-owner < "$in"
 
   echo "imported. current corpus:"
   status

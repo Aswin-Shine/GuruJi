@@ -99,10 +99,7 @@ async function request<T>(path: string, opts: Options = {}): Promise<T> {
       method,
       headers,
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      // Same-origin and header-based auth, so no cookies are wanted anywhere.
-      // "omit" also means a future cookie on this origin can never be replayed
-      // by this client as ambient authority.
-      credentials: "omit",
+      credentials: "same-origin",
       cache: "no-store",
       redirect: "error", // a redirect on an API path is a misconfiguration, not a flow
       signal: AbortSignal.timeout(slow ? TIMEOUT_SLOW_MS : TIMEOUT_MS),
@@ -113,10 +110,8 @@ async function request<T>(path: string, opts: Options = {}): Promise<T> {
     }
     throw new ApiError(0, "No connection. Check your internet and try again.");
   }
-
-  // 401 means the token is expired, revoked, or forged. Drop it here, once,
-  // rather than letting every screen invent its own sign-out path.
-  if (res.status === 401) {
+  
+  if (res.status === 401 && auth) {
     session.clear();
     throw new ApiError(401, "Your session ended. Sign in again.");
   }
