@@ -1,0 +1,177 @@
+# =============================================================================
+#  GuruJi — full stack: web (nginx + Preact) · api (FastAPI) · db (Postgres+pgvector)
+#
+#  Run:      docker compose up --build
+#  Local dev: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+#  The dev override is what exposes the database and API ports to the host. This
+#  file deliberately does not: in this topology the ONLY thing reachable from
+#  outside is the web container on :8080. The API is reachable solely through
+#  nginx, and the database is on an internal network with no route to the
+#  internet at all.
+#
+#  There is no `version:` key. It has been obsolete since Compose v2 and current
+#  Compose warns about it.
+# =============================================================================
+
+name: guruji
+
+# ---- shared logging ---------------------------------------------------------
+# Without this, container logs grow until they fill the disk. That is the single
+# most common way a small self-hosted deployment dies, and it always happens at
+# 3am on a weekend.
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+# ---- shared hardening -------------------------------------------------------
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true   # a setuid binary inside cannot escalate
+  cap_drop:
+    - ALL                      # add back individually if something genuinely needs one
+  restart: unless-stopped
+  init: true                   # real PID 1 that reaps zombies and forwards signals
+
+services:
+  # ---------------------------------------------------------------------------
+  #  web — nginx serving the static bundle and reverse-proxying /api
+  # ---------------------------------------------------------------------------
+  web:
+    <<: [*logging, *hardening]
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: guruji-web:local
+    ports:
+      # Bound to loopback. Put a TLS terminator (Caddy, an ALB, Cloudflare) in
+      # front of this before it faces the internet — nothing here speaks HTTPS,
+      # and the HSTS header only means something once something does.
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - edge
+    # The image ships static files and a config; nothing legitimate writes to
+    # disk at runtime. Read-only turns a write primitive into a dead end.
+    read_only: true
+    tmpfs:
+      # Every path nginx.conf redirects its scratch writes to. Remove these and
+      # nginx will not start.
+      - /tmp:mode=1777,size=32m,noexec,nosuid,nodev
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 96M
+        reservations:
+          memory: 32M
+
+  # ---------------------------------------------------------------------------
+  #  api — FastAPI. Single worker; see the note in backend/Dockerfile.
+  # ---------------------------------------------------------------------------
+  api:
+    <<: [*logging, *hardening]
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: guruji-api:local
+    env_file:
+      - .env
+    environment:
+      # Overrides whatever .env says: inside compose the database is `db`, and a
+      # stale localhost URL in a developer's .env is a confusing failure.
+      DATABASE_URL: postgresql+psycopg2://guruji:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@db:5432/guruji
+      APP_ENV: ${APP_ENV:-local}
+    depends_on:
+      db:
+        condition: service_healthy   # init_db() runs at startup and needs a live DB
+    networks:
+      - edge   # outbound to the OpenAI API
+      - data   # inbound to Postgres
+    # No ports. The API is reachable only through nginx.
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=64m,noexec,nosuid,nodev
+    deploy:
+      resources:
+        limits:
+          # One uvicorn worker doing synchronous OpenAI calls. More CPU does not
+          # buy throughput here; the ceiling is the blocking model call.
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          memory: 128M
+
+  # ---------------------------------------------------------------------------
+  #  db — Postgres 16 with pgvector
+  # ---------------------------------------------------------------------------
+  db:
+    <<: [*logging, *hardening]
+    # Pinned to a patch tag, not `:pg16`. Note that changing the POSTGRES MAJOR
+    # here is a dump-and-restore, not a tag bump — the data directory format
+    # differs between majors and the container will refuse to start on mismatch.
+    image: pgvector/pgvector:0.8.1-pg16
+    # The shared hardening block drops every capability — correct for `web` and
+    # `api`, which are plain long-running processes. Postgres's own entrypoint
+    # needs a few of them back to get itself running before it ever serves a
+    # connection: it starts as root, fixes ownership on the data directory
+    # (CHOWN, FOWNER), traverses it with `find` first — which needs DAC_OVERRIDE,
+    # since root without it is subject to the same 0700-owned-by-postgres
+    # permission bits as anyone else — then drops to the unprivileged `postgres`
+    # user via gosu before launching the server (SETUID, SETGID). Postgres
+    # refuses to run its server process as root regardless of container UID.
+    cap_add:
+      - CHOWN
+      - FOWNER
+      - DAC_OVERRIDE
+      - SETUID
+      - SETGID
+    environment:
+      POSTGRES_DB: guruji
+      POSTGRES_USER: guruji
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      # scram-sha-256 rather than the historical md5 default.
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+    networks:
+      - data   # internal: true — this container has no route to the internet
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # -U/-d matter: bare pg_isready reports ready during the initdb bootstrap
+      # phase, and the api would then race it and crash on first connect.
+      test: ["CMD-SHELL", "pg_isready -U guruji -d guruji -h 127.0.0.1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    # Postgres needs to write to its data volume, so read_only is off here — but
+    # it still runs with no capabilities and no privilege escalation.
+    tmpfs:
+      - /tmp:mode=1777,size=64m
+    shm_size: 256mb   # default 64m is tight for pgvector scans; avoids OOM on sort
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          memory: 256M
+
+networks:
+  edge:
+    driver: bridge
+  data:
+    driver: bridge
+    # No gateway to the outside world. If the database container is ever
+    # compromised, it cannot phone home or exfiltrate to the internet — it can
+    # only talk to the api container.
+    internal: true
+
+volumes:
+  pgdata:
+    driver: local

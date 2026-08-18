@@ -1,0 +1,21 @@
+# =============================================================================
+#  Local development override.
+#    docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+#  Everything here loosens the production posture on purpose. Never apply this
+#  file on a host that is reachable from anywhere but your own machine.
+# =============================================================================
+
+services:
+  api:
+    ports:
+      # Direct access to FastAPI's /docs and /redoc, bypassing nginx.
+      # Loopback-bound so it is not exposed on the LAN.
+      - "127.0.0.1:8000:8000"
+    environment:
+      APP_ENV: local
+      DEV_OTP_BYPASS: "1"   
+
+  db:
+    ports: !override
+      - "127.0.0.1:5433:5432"

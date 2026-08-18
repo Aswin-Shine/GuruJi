@@ -1,0 +1,6 @@
+services:
+  api:
+    deploy:
+      resources:
+        limits:
+          memory: 2G

@@ -1,0 +1,106 @@
+# =============================================================================
+#  Caddy overlay — TLS termination and the pilot access gate.
+#
+#    docker compose -f docker-compose.yml \
+#                   -f docker-compose.dev.yml \
+#                   -f docker-compose.caddy.yml up -d
+#
+#  Order matters: this file must come LAST so its port bindings win.
+#
+#  The dev override is included above on purpose during the bridge period — it
+#  is what keeps DEV_OTP_BYPASS on while real per-phone codes are being built.
+#  Caddy's basic_auth is the only thing standing between that bypass and the
+#  open internet, so do not run this stack without the Caddyfile gate in place.
+#
+#  Drop docker-compose.dev.yml from that command the moment per-phone codes
+#  exist. Nothing else here needs to change.
+# =============================================================================
+
+services:
+  caddy:
+    # Pin this to the exact tag you first pull:
+    #   docker image inspect caddy:2-alpine --format '{{index .RepoDigests 0}}'
+    # A floating major tag means a future `pull` can change your TLS terminator
+    # without a config change, which is the one component you least want to
+    # change unattended.
+    image: caddy:2-alpine
+    container_name: guruji-caddy
+    restart: unless-stopped
+    init: true
+
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      # Required. Binding to 80 and 443 needs this even as root, and the
+      # cap_drop above removes it — the same trap that breaks the db service
+      # when its capabilities are stripped. Without this, Caddy exits at start
+      # with "permission denied" on :80 and the failure looks like a config bug.
+      - NET_BIND_SERVICE
+
+    ports:
+      # 80 is NOT optional. Let's Encrypt's HTTP-01 challenge uses it, and Caddy
+      # also uses it to redirect http:// to https://. Closing it in the EC2
+      # security group is the most common reason certificate issuance fails.
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+
+    environment:
+      # Set these in .env alongside the rest of the stack's configuration.
+      # Quoted, all of them. An unquoted ${VAR:?message} whose message contains
+      # ": " makes YAML read the remainder as a nested mapping and the file fails
+      # to parse — a confusing error that points at the wrong line.
+      GURUJI_HOSTNAME: "${GURUJI_HOSTNAME:?set GURUJI_HOSTNAME in .env, e.g. guruji.ddns.net}"
+      ACME_EMAIL: "${ACME_EMAIL:?set ACME_EMAIL in .env to an address you actually read}"
+      GURUJI_PILOT_USER: "${GURUJI_PILOT_USER:-pilot}"
+      GURUJI_PILOT_PASSWORD_HASH: "${GURUJI_PILOT_PASSWORD_HASH:?set it in .env - generate with caddy hash-password}"
+
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # caddy_data holds the issued certificates and the ACME account key. If
+      # this is not persistent, every restart re-requests a certificate and you
+      # will hit Let's Encrypt's rate limit for the hostname — then be locked
+      # out of issuance for days, mid-pilot.
+      - caddy_data:/data
+      - caddy_config:/config
+
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=16m,noexec,nosuid,nodev
+
+    depends_on:
+      - web
+
+    networks:
+      - edge
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 128M
+        reservations:
+          memory: 32M
+
+  web:
+    ports: !override
+      # Caddy is the only thing that should reach nginx now. Keeping the host
+      # publish would leave a plaintext, ungated copy of the app on :8080 —
+      # loopback-only, so not internet-reachable, but it is also the port an
+      # accidental `-p` or a future security-group edit would expose. Reachable
+      # through the container network as web:8080 either way.
+      []
+
+volumes:
+  caddy_data:
+    driver: local
+  caddy_config:
+    driver: local
