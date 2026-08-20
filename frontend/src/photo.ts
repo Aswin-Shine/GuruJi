@@ -27,7 +27,7 @@ const QUALITY = 0.82;
  *  odd cases (a dense photo of a whole page), not the expected size. */
 const MAX_BYTES = 5_000_000;
 
-export class PhotoTooBig extends Error {}
+export class PhotoTooBig extends Error { }
 
 export async function downscale(file: File): Promise<Blob> {
   const bitmap = await createImageBitmap(file);
@@ -57,3 +57,5 @@ export async function downscale(file: File): Promise<Blob> {
   if (blob.size > MAX_BYTES) throw new PhotoTooBig("That photo is too large.");
   return blob;
 }
+
+export const ACCEPTED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
