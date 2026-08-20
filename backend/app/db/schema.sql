@@ -112,6 +112,13 @@ ALTER TABLE conversations ADD COLUMN IF NOT EXISTS subject TEXT;
 CREATE INDEX IF NOT EXISTS curriculum_documents_subject_idx
   ON curriculum_documents (subject, grade);
 
+-- How the student's message arrived. NULL or 'text' for typed messages, 'photo'
+-- for a question transcribed from an image. The image itself is never stored, so
+-- this column is the only trace that one existed — which matters when a founder
+-- or a parent reads a transcript and needs to know the child photographed a page
+-- rather than typed it.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS source TEXT;
+
 -- Provenance persisted ON the message, not just returned once. Without these, a
 -- citation is renderable only during the live turn and lost on reload — History would
 -- show the same replies stripped of the one thing that distinguishes GuruJi from any

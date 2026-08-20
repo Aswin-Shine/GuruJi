@@ -8,16 +8,36 @@ import json
 import logging
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from sqlalchemy.orm import Session
 
 from sqlalchemy import text
 
-from app.config import ALLOWED_PHONE_NUMBERS, WHATSAPP_APP_SECRET, WHATSAPP_VERIFY_TOKEN
+from app.config import (
+    ALLOWED_PHONE_NUMBERS,
+    MAX_IMAGE_BYTES,
+    PHOTO_QUESTIONS_ENABLED,
+    WHATSAPP_APP_SECRET,
+    WHATSAPP_VERIFY_TOKEN,
+)
 from app.db.session import get_db
 from app.modules.conversation import service
 from app.modules.conversation.schemas import ConversationOut, MessageOut, SendMessageIn, SendMessageOut
 from app.modules.identity import service as identity
+from app.modules.ai_orchestrator import llm, vision
+from app.modules.ai_orchestrator.orchestrator import FALLBACK_MODERATED
+from app.modules.safety import service as safety
 from app.modules.memory import service as memory
 from app.modules.identity.dependencies import CurrentUser, get_current_user
 from app.modules.student_profile import service as profile
@@ -217,6 +237,93 @@ def send_message(
         conversation_id=conv_id, reply=turn.reply,
         grounding=turn.grounding, citation=turn.citation,
         source_excerpt=turn.source_excerpt,
+    )
+
+
+@router.post("/conversations/photo", response_model=SendMessageOut, tags=["web-client"])
+def send_photo(
+    background_tasks: BackgroundTasks,
+    photo: UploadFile = File(...),
+    new_session: bool = Form(False),
+    conversation_id: uuid.UUID | None = Form(None),
+    current: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SendMessageOut:
+    """A photographed question.
+
+    The image is transcribed to text and discarded; from that point this is the
+    same call as send_message() and runs the same handle_student_message(). The
+    tutoring model never sees the picture, so grounding, citations, refusals and
+    validation behave exactly as they do for a typed question.
+
+    Order of operations is the security-relevant part, and it is cheapest-first
+    on purpose:
+        auth -> feature flag -> rate limit -> size -> format -> moderation
+        -> transcription -> existing pipeline
+    Everything free happens before anything paid, and moderation happens before
+    the image reaches any generation model.
+    """
+    if not PHOTO_QUESTIONS_ENABLED:
+        # 404, not 501: an endpoint that is switched off should not advertise that
+        # it exists and might be switched on.
+        raise HTTPException(status_code=404, detail="Not found")
+    if current.role != "student" or current.student_id is None:
+        raise HTTPException(status_code=403, detail="Students only")
+    if service.rate_limited(current.user_id):
+        raise HTTPException(status_code=429, detail="Thoda dheere, dost! Ek minute ruk ke phir poochho.")
+
+    # Read with a hard ceiling rather than trusting Content-Length, which is a
+    # claim by the client. One byte over is enough to reject on.
+    raw = photo.file.read(MAX_IMAGE_BYTES + 1)
+    if len(raw) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="That photo is too large. Try taking it again.")
+
+    try:
+        vision.validate_image(raw, photo.content_type or "")
+    except vision.ImageRejected as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    student = profile.get_student(db, current.student_id)
+    if student is None:
+        raise HTTPException(status_code=404, detail="Student profile not found")
+
+    try:
+        if vision.moderate_image(raw, photo.content_type or ""):
+            # The image is not stored, so the flag records that a photo was sent
+            # and blocked, not its contents. A parent reviewing this sees an event
+            # they can ask their child about, which is the point of the record.
+            safety.record_flag(db, student.id, "inbound", "[photo question, blocked]")
+            log.warning("photo flagged by moderation, student=%s", student.id)
+            raise HTTPException(status_code=422, detail=FALLBACK_MODERATED)
+        text_in, p_tok, c_tok = vision.transcribe(raw, photo.content_type or "")
+    except vision.ImageRejected as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except llm.LLMUnavailable:
+        raise HTTPException(status_code=503, detail="Abhi photo padhne mein dikkat ho rahi hai. Thodi der baad try karo.")
+    finally:
+        # Explicit, immediately, on every path including the failures above. The
+        # bytes are not written anywhere else in this function; this just stops
+        # them lingering in the frame while the tutoring call runs.
+        raw = b""
+        photo.file.close()
+
+    llm.record_spend(db, p_tok, c_tok)
+
+    if new_session:
+        service.close_open_sessions(db, student.id, "web")
+    try:
+        turn, conv_id, regen = service.handle_student_message(
+            db, student, "web", text_in,
+            force_new=new_session, target_id=conversation_id, source="photo",
+        )
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if regen is not None:
+        background_tasks.add_task(memory.regenerate, regen.student_id, regen.grade, regen.transcript)
+    return SendMessageOut(
+        conversation_id=conv_id, reply=turn.reply,
+        grounding=turn.grounding, citation=turn.citation,
+        source_excerpt=turn.source_excerpt, transcribed_text=text_in,
     )
 
 

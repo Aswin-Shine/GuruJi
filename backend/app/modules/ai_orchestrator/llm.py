@@ -18,6 +18,7 @@ from app.config import (
     OPENAI_API_KEY,
     PRICE_INPUT_PER_M,
     PRICE_OUTPUT_PER_M,
+    VISION_DETAIL,
 )
 
 log = logging.getLogger("guruji.llm")
@@ -131,6 +132,58 @@ def chat(model: str, system: str, user: str, max_tokens: int, retry: bool = True
             max_completion_tokens=max_tokens,
         ),
         retry=retry,
+    )
+    return (
+        resp.choices[0].message.content or "",
+        resp.usage.prompt_tokens,
+        resp.usage.completion_tokens,
+    )
+
+
+def moderate_image_url(image_url: str, retry: bool = True) -> bool:
+    """True = flagged. Image moderation, same blocking contract as moderate().
+
+    The omni moderation model takes image inputs directly, so this is the same
+    endpoint and the same fail-closed behaviour as text — not a second, weaker
+    safety system bolted on beside the first.
+    """
+    result = _retry_once(
+        lambda: client.moderations.create(
+            model=MODERATION_MODEL,
+            input=[{"type": "image_url", "image_url": {"url": image_url}}],
+        ),
+        retry=retry,
+    )
+    return result.results[0].flagged
+
+
+def chat_vision(model: str, system: str, image_url: str, max_tokens: int) -> tuple[str, int, int]:
+    """One vision call. Returns (text, prompt_tokens, completion_tokens).
+
+    `detail` comes from config. It is the single biggest lever on both cost and
+    transcription quality: "low" downsamples to ~512px for a flat ~85 tokens,
+    "high" reads the image in tiles. Raising the upload size limit without
+    raising this changes nothing, because the model never sees the extra pixels.
+
+    retry=False: a vision call is the most expensive request this product makes,
+    and it sits in front of the whole tutoring pipeline. Paying for it twice to
+    save a student one retap is the wrong trade on both cost and latency.
+    """
+    resp = _retry_once(
+        lambda: client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": image_url, "detail": VISION_DETAIL}},
+                    ],
+                },
+            ],
+            max_completion_tokens=max_tokens,
+        ),
+        retry=False,
     )
     return (
         resp.choices[0].message.content or "",

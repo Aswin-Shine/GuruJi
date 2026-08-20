@@ -54,6 +54,41 @@ RAG_WEAK_THRESHOLD: float = float(os.environ.get("RAG_WEAK_THRESHOLD", "0.28"))
 # not settled the question — set to 0 if refusal accuracy drops below ~90%.
 RAG_LEXICAL_RESCUE: bool = os.environ.get("RAG_LEXICAL_RESCUE", "1") == "1"
 
+# ---------------------------------------------------------------------------
+# Photo questions. The image is transcribed to text and discarded; it is never
+# stored. See app/modules/ai_orchestrator/vision.py for the reasoning.
+# ---------------------------------------------------------------------------
+
+# OFF by default, and deliberately so: this path accepts images from children,
+# and it should not become reachable merely because the code was deployed. Turn
+# it on once parental consent covers it.
+PHOTO_QUESTIONS_ENABLED: bool = os.environ.get("PHOTO_QUESTIONS_ENABLED", "0") == "1"
+
+# The client downscales before upload and normally lands far under this. The
+# ceiling exists for requests that did not come from the client, and it is
+# enforced before any paid call. Must stay BELOW the nginx and Caddy body limits
+# in front of it, so an oversized upload gets a useful message from the app
+# rather than a bare 413 from a proxy.
+MAX_IMAGE_BYTES: int = int(os.environ.get("MAX_IMAGE_BYTES", str(5_000_000)))
+
+# Vision-capable model used ONLY to read a question off a photo, never to answer
+# one. Pinned as an explicit string like every other model here.
+VISION_MODEL: str = os.environ.get("VISION_MODEL", "gpt-5.6-luna")
+
+# How much of the image the vision model actually looks at.
+#
+#   "low"   the image is downsampled to ~512px and costs a flat ~85 input tokens,
+#           whatever its original size. Fine for printed text, marginal for
+#           handwriting, and it makes a larger upload completely pointless.
+#   "high"  the image is read in tiles at full resolution. Several times the
+#           input tokens, and the only setting where sending a bigger, sharper
+#           photo actually buys better transcription.
+#
+# "high" is the default because the subject here is a child's handwritten
+# homework, which is exactly the case "low" reads worst. Set to "low" to cut the
+# per-photo cost by roughly half.
+VISION_DETAIL: str = os.environ.get("VISION_DETAIL", "high")
+
 RATE_LIMIT_PER_MIN: int = 20
 CONVERSATION_GAP_HOURS: int = 4
 

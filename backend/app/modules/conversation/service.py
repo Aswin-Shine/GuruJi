@@ -168,6 +168,7 @@ def handle_student_message(
     target_id: uuid.UUID | None = None,
     grade: int | None = None,
     subject: str | None = None,
+    source: str | None = None,
 ) -> tuple[TurnResult, uuid.UUID, RegenArgs | None]:
     """Returns (turn, conversation_id, regen_args_or_None). The caller schedules
     regeneration; this function never blocks on it.
@@ -197,7 +198,7 @@ def handle_student_message(
             regen = RegenArgs(student.id, student.grade, _recent_transcript(db, prev.id))
 
     history = _recent_transcript(db, conv.id, limit=HISTORY_TURNS, max_chars=HISTORY_MAX_CHARS)
-    db.add(Message(conversation_id=conv.id, sender="student", content=text_in))
+    db.add(Message(conversation_id=conv.id, sender="student", content=text_in, source=source))
     # The first thing the student typed is the most honest label available without
     # paying a model call to summarise it.
     if conv.title is None:

@@ -32,6 +32,10 @@ class Message(Base):
     content = Column(Text, nullable=False)
     tokens_used = Column(Integer)
     model_used = Column(Text)
+    # How a STUDENT message arrived: NULL/'text' when typed, 'photo' when
+    # transcribed from an image. The image is never stored, so this is the only
+    # record that one existed.
+    source = Column(Text)
     # Provenance, so it survives a reload. NULL on student messages.
     grounding = Column(Text)
     citation = Column(Text)

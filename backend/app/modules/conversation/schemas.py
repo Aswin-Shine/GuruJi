@@ -13,6 +13,10 @@ class MessageOut(BaseModel):
     # live turn did. NULL on student messages.
     grounding: str | None = None
     citation: str | None = None
+    # 'photo' when this student message was transcribed from an image. The image
+    # is not stored, so this is the only signal in a reloaded transcript that the
+    # child sent a picture rather than typing.
+    source: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -50,6 +54,10 @@ class SendMessageOut(BaseModel):
     # trust a chapter label and letting them read the sentence. Truncated server-side:
     # shipping 5.6kB of chunk text per turn to a budget phone is not free.
     source_excerpt: str | None = None
+    # Set only on the photo path: what the vision model read off the image.
+    # The client renders it as the student's own message, so the child can see
+    # what GuruJi understood the question to be and retype it if it misread.
+    transcribed_text: str | None = None
 
 
 class ConversationOut(BaseModel):
