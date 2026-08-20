@@ -2351,3 +2351,37 @@ textarea {
   background: var(--surface-3);
   color: var(--dim);
 }
+
+/* Photo a student sent this session. Capped by viewport height as well as width:
+   a portrait photo of a whole page would otherwise push the reply off-screen and
+   the answer is the thing they are waiting for. */
+.turn>.photo {
+  display: block;
+  max-inline-size: min(320px, 72%);
+  max-block-size: 40vh;
+  inline-size: auto;
+  block-size: auto;
+  object-fit: contain;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  margin-block-end: .4rem;
+  background: var(--surface-2);
+}
+
+.turn[data-from="student"]>.photo {
+  margin-inline-start: auto;
+}
+
+/* Drag-and-drop target. An inset outline rather than a border, so the layout does
+   not shift by a pixel when it appears and the whole log jump-scrolls. */
+.scroll[data-dropping="true"] {
+  outline: 2px dashed var(--accent);
+  outline-offset: -8px;
+  border-radius: 12px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .scroll[data-dropping="true"] {
+    transition: outline-color .12s ease;
+  }
+}

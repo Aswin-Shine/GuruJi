@@ -151,12 +151,19 @@ export interface SendMessageOut {
   /** The passage the answer was built from. Lets a child CHECK the claim rather
    *  than trust the chapter label — the anti-hallucination pitch made verifiable. */
   source_excerpt: string | null;
+  /** Photo questions only: what the vision model read off the image. Shown as the
+   *  student's own message, because a child needs to be able to tell "GuruJi
+   *  misread my handwriting" apart from "GuruJi got the answer wrong". */
+  transcribed_text?: string | null;
 }
 
-/** Preset avatar glyphs. Not an upload: there is no S3 bucket at Phase 1, no
- *  image moderation, and no lawful basis under the DPDP Rules to store a
- *  photograph of a minor. A picker gives the child the same sense of ownership
- *  at none of that cost, and works offline. */
+/** Preset avatar glyphs. Not an upload: there is no object store, no lawful
+ *  basis under the DPDP Rules to RETAIN a photograph of a minor, and a picker
+ *  gives the child the same sense of ownership at none of that cost.
+ *
+ *  Photo questions are not a contradiction of this: that image is moderated,
+ *  transcribed, and discarded within the request. It is never stored, so the
+ *  retention question this comment is about never arises. */
 export const AVATARS = [
   "🦉", "🚀", "🐯", "🌟", "🧠", "🎯",
   "🦁", "🐬", "⚡", "🌱", "🎨", "🏏",
@@ -190,6 +197,10 @@ export interface MessageOut {
   sender: "student" | "assistant";
   content: string;
   created_at: string;
+  /** 'photo' when this student message was transcribed from an image. The image
+   *  itself is never stored, so on a reloaded transcript this is the only trace
+   *  that the child sent a picture rather than typed. */
+  source?: string | null;
   /** null on student messages and on anything stored before provenance existed. */
   grounding: Grounding | null;
   citation: string | null;

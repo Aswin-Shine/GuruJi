@@ -1,6 +1,7 @@
 import type { JSX } from "preact";
 import { useContext, useEffect, useRef, useState } from "preact/hooks";
 import { api } from "../api";
+import { ACCEPTED_IMAGE_TYPES, downscale } from "../photo";
 import { MAX_MESSAGE_CHARS, stateFor, type Grounding, type ReplyState } from "../backend";
 import type { CurriculumSubject } from "../backend";
 import { openersFor } from "../openers";
@@ -27,6 +28,66 @@ interface Turn {
   grounding?: Grounding | null;
   citation?: string | null;
   excerpt?: string | null;
+  /** Object URL for a photo sent in THIS session, so the student can see the
+   *  picture they took next to what GuruJi read from it.
+   *
+   *  Session-scoped on purpose. The server never stores the image, so a reload
+   *  reconstructs the transcript from text alone and this is undefined — the
+   *  `fromPhoto` marker below is what survives. Making the picture outlive the
+   *  session would mean retaining a photograph taken by a child, which is the
+   *  thing the whole feature is built to avoid. */
+  image?: string;
+  /** True when this student message arrived as a photo. Set live from the upload
+   *  and on reload from MessageOut.source, so the marker is consistent either
+   *  way even though the image itself is not. */
+  fromPhoto?: boolean;
+}
+
+/* ---------------------------------------------------------------------------
+   Photo previews.
+
+   MODULE scope, not component state or a ref, and this is the whole fix for the
+   picture vanishing a second after it appeared.
+
+   Sending the first photo navigates to the new conversation URL. That rebuilds
+   the turn list from the server, which stores only the transcribed text — so
+   anything held inside the component is gone by the time the list comes back,
+   and a remount would additionally revoke the blob and leave a broken-image
+   glyph on screen. Keeping the map outside the component makes it survive both.
+
+   Keyed by conversation id + message text, the only thing both sides agree on:
+   sendPhoto returns `transcribed_text` and the server stores exactly that as the
+   student message.
+
+   Lives for the tab, deliberately. A reload starts empty, so the picture is gone
+   and the "Sent as a photo" marker takes over — the image was never stored
+   server-side and is not meant to outlive the session.
+--------------------------------------------------------------------------- */
+const objectUrls = new Set<string>();
+
+/* conversationId -> preview URLs, in the order they were sent.
+   Keyed by POSITION, not by the transcribed text. Text looked like the obvious
+   key and is not: the server may normalise, truncate at 2000 chars, or return a
+   re-transcription that differs by a character, and any of those makes the
+   lookup miss silently — the picture just quietly fails to come back. The nth
+   photo message in a conversation is always the nth photo sent to it. */
+const photoPreviews = new Map<string, string[]>();
+
+function rememberPreview(convId: string, url: string): void {
+  const list = photoPreviews.get(convId) ?? [];
+  list.push(url);
+  photoPreviews.set(convId, list);
+}
+
+/** Revoke every preview and forget them. Called when the session genuinely ends
+ *  — sign-out — rather than on unmount, because navigating between chats
+ *  unmounts too and that must not destroy a picture the student is still
+ *  looking at. Blobs are not garbage collected while a URL exists, so this is
+ *  what stops twenty photos pinning twenty full-size images in memory. */
+export function clearPhotoPreviews(): void {
+  objectUrls.forEach((u) => URL.revokeObjectURL(u));
+  objectUrls.clear();
+  photoPreviews.clear();
 }
 
 let seq = 0;
@@ -71,8 +132,13 @@ function splitCitation(citation: string): { mark: string; name: string } {
    Still not disabled. A greyed-out control tells someone the feature is broken; a
    live one that answers in words tells them it is scheduled. */
 const TOOLS = [
-  { key: "photo", label: "Take a photo of your question", soon: "Photo questions arrive with the pilot." },
-  { key: "attach", label: "Attach a file", soon: "File attachments arrive with the pilot." },
+  // `soon: null` means the row is live. Photo is the only one built: the image is
+  // transcribed to text on the server and discarded, so it is an input method
+  // rather than a new answer source, and nothing downstream changes.
+  // "Add", not "Take": on a laptop this opens the file browser, not a camera.
+  // The same input serves both — `capture` is honoured by phones and ignored by
+  // desktop browsers — so one row covers every device without branching.
+  { key: "photo", label: "Add a photo of your question", soon: null },
   { key: "note", label: "Save a note", soon: "Notes arrive with the pilot." },
   { key: "voice", label: "Ask with your voice", soon: "Voice questions arrive with the pilot." },
 ] as const;
@@ -186,8 +252,21 @@ export function Chat(): JSX.Element {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const photoRef = useRef<HTMLInputElement>(null);
+  // Highlights the log while a file is dragged over it. Counter, not a boolean:
+  // dragenter/dragleave fire for every child element the pointer crosses, so a
+  // plain flag flickers off the moment the cursor moves between two bubbles.
+  const [dragDepth, setDragDepth] = useState(0);
   // Bound to the URL so Back works and a reload lands in the same conversation.
   const targetId = conversationParam() ?? undefined;
+  /* Set just before navigating to a conversation we have JUST posted to.
+     Sending the first message of a new chat calls navigate("/chat/<id>"), which
+     re-runs the loader below and replaces the turns with the server's copy. That
+     copy is correct for text and lossy for photos — the image was discarded
+     during the request and only exists in this tab. Refetching what we already
+     hold is a wasted round trip AND the thing that drops the picture, so the
+     loader skips exactly once. */
+  const skipNextLoad = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -196,22 +275,42 @@ export function Chat(): JSX.Element {
         setTurns([]);
         return;
       }
+      if (skipNextLoad.current === targetId) {
+        // We navigated here ourselves, moments ago, and the turns on screen are
+        // already this conversation — including any photo previews.
+        skipNextLoad.current = null;
+        return;
+      }
       try {
         const msgs = await api.messages(targetId);
         if (cancelled) return;
+        // Re-attach previews this tab still holds, by position. The server sends
+        // the transcript text only — the image was discarded during the request —
+        // so without this, the navigate() that follows the first message of a new
+        // chat silently drops the picture the student just sent.
+        const previews = photoPreviews.get(targetId) ?? [];
+        let photoIndex = 0;
         setTurns(
-          msgs.map((m) => ({
-            id: nextId(),
-            from: m.sender === "student" ? "student" : "guruji",
-            text: m.content,
-            ...(m.sender === "assistant"
-              ? {
-                state: stateFor(m.content, m.grounding),
-                grounding: m.grounding,
-                citation: m.citation,
-              }
-              : {}),
-          })),
+          msgs.map((m) => {
+            const isPhoto = m.sender === "student" && m.source === "photo";
+            // Undefined for a photo sent before a reload or from another device;
+            // the marker then stands in for the picture. The key is OMITTED
+            // rather than set to undefined, because exactOptionalPropertyTypes
+            // treats an explicit undefined as a different thing from absence.
+            const url = isPhoto ? previews[photoIndex++] : undefined;
+            return {
+              id: nextId(),
+              from: m.sender === "student" ? "student" : "guruji",
+              text: m.content,
+              ...(m.sender === "assistant"
+                ? {
+                  state: stateFor(m.content, m.grounding),
+                  grounding: m.grounding,
+                  citation: m.citation,
+                }
+                : { fromPhoto: isPhoto, ...(url ? { image: url } : {}) }),
+            };
+          }),
         );
       } catch {
         if (!cancelled) setError("Couldn't open that chat.");
@@ -332,6 +431,40 @@ export function Chat(): JSX.Element {
     });
   }, [turns.length, busy]);
 
+  function trackObjectUrl(url: string): void {
+    objectUrls.add(url);
+  }
+
+  function releaseObjectUrl(url: string): void {
+    if (objectUrls.delete(url)) URL.revokeObjectURL(url);
+    // Also drop it from the per-conversation lists, or a failed upload leaves a
+    // dead URL occupying a position and every later preview lands on the wrong
+    // message.
+    for (const [conv, list] of photoPreviews) {
+      const i = list.indexOf(url);
+      if (i !== -1) list.splice(i, 1);
+      if (list.length === 0) photoPreviews.delete(conv);
+    }
+  }
+
+  /** A preview whose blob is gone renders as a broken-image glyph next to its alt
+   *  text, which is worse than showing nothing — it looks like the upload failed
+   *  when the answer above it plainly worked. Drop the image and let the
+   *  "Sent as a photo" marker take over, which is the honest state anyway. */
+  function dropDeadPreview(turnId: number): void {
+    setTurns((t) =>
+      t.map((x) => {
+        if (x.id !== turnId) return x;
+        // The key is DELETED, not set to undefined. exactOptionalPropertyTypes
+        // treats an explicit undefined as a different thing from an absent
+        // property, and `{...x, image: undefined}` would not even typecheck.
+        const { image: _dead, ...rest } = x;
+        return rest;
+      }),
+    );
+  }
+
+
   function say(msg: string): void {
     setToast(msg);
     window.setTimeout(() => setToast(null), 2600);
@@ -352,13 +485,7 @@ export function Chat(): JSX.Element {
 
     // Consumed once. If this survived a reload, every refresh would silently open
     // a new conversation and fill the student's history with empty rows.
-    let newSession = false;
-    try {
-      newSession = sessionStorage.getItem("guruji.newchat") === "1";
-      if (newSession) sessionStorage.removeItem("guruji.newchat");
-    } catch {
-      /* continue in the current session */
-    }
+    const newSession = takeNewSessionFlag();
 
     try {
       const r = await api.send(body, {
@@ -384,12 +511,133 @@ export function Chat(): JSX.Element {
       refreshConversations();
       // Bind to the conversation the server actually used, so the next message
       // continues it rather than re-triggering the 4-hour rule.
-      if (!targetId) navigate(`/chat/${r.conversation_id}`, true);
+      if (!targetId) {
+        skipNextLoad.current = r.conversation_id;
+        navigate(`/chat/${r.conversation_id}`, true);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Message didn't send.");
     } finally {
       setBusy(false);
       inputRef.current?.focus();
+    }
+  }
+
+  /** Consumed once. Shared by send() and sendPhoto() so a photo taken right after
+   *  "New chat" starts the new thread rather than appending to the old one. */
+  function takeNewSessionFlag(): boolean {
+    try {
+      const v = sessionStorage.getItem("guruji.newchat") === "1";
+      if (v) sessionStorage.removeItem("guruji.newchat");
+      return v;
+    } catch {
+      return false;
+    }
+  }
+
+  /** The one gate every image entry point goes through, whatever the gesture.
+   *
+   *  Only images. A dropped PDF or .docx is rejected here rather than uploaded
+   *  and refused by the server, so the child is told why while the file is still
+   *  in front of them. */
+  function acceptImage(file: File | null | undefined): void {
+    if (!file) return;
+    if (!ACCEPTED_IMAGE_TYPES.includes(file.type)) {
+      setError("Sirf photo bhej sakte ho — JPG, PNG ya WebP.");
+      return;
+    }
+    void sendPhoto(file);
+  }
+
+  /** Ctrl/Cmd-V of a screenshot.
+   *
+   *  The natural desktop flow for a question on screen is the snipping tool then
+   *  paste — there is no file on disk to browse to. Without this, a child on a
+   *  computer has to save the screenshot somewhere first and then find it again.
+   *
+   *  Deliberately does NOT intercept a text paste: the composer must keep working
+   *  normally, so this only acts when the clipboard actually carries an image. */
+  useEffect(() => {
+    function onPaste(e: ClipboardEvent): void {
+      const item = Array.from(e.clipboardData?.items ?? []).find((i) =>
+        i.type.startsWith("image/"),
+      );
+      if (!item) return;
+      e.preventDefault();
+      acceptImage(item.getAsFile());
+    }
+    document.addEventListener("paste", onPaste);
+    return () => document.removeEventListener("paste", onPaste);
+  });
+
+  async function sendPhoto(file: File): Promise<void> {
+    if (busy) return;
+    setError(null);
+    setBusy(true);
+
+    // A placeholder turn, because downscale + upload + vision + tutoring is the
+    // longest wait in this app. Without it the screen sits unchanged for several
+    // seconds after the camera closes and the tap looks like it did nothing.
+    const placeholderId = nextId();
+    // Preview from the ORIGINAL file, shown immediately — before downscaling and
+    // before the upload. The student sees what they photographed while the round
+    // trip runs, instead of several blank seconds.
+    const previewUrl = URL.createObjectURL(file);
+    trackObjectUrl(previewUrl);
+    setTurns((t) => [
+      ...t,
+      { id: placeholderId, from: "student", text: "", image: previewUrl, fromPhoto: true },
+    ]);
+
+    const newSession = takeNewSessionFlag();
+    try {
+      const image = await downscale(file);
+      const r = await api.sendPhoto(image, {
+        ...(newSession ? { newSession: true } : {}),
+        ...(targetId ? { conversationId: targetId } : {}),
+      });
+      // Recorded BEFORE setTurns, so the history reload that `navigate` triggers
+      // below already finds it. Registering afterwards loses that race and the
+      // picture disappears on exactly the first photo of a conversation.
+      //
+      // Unconditional: a transcription that came back empty is still a photo the
+      // student sent and is still the nth photo in this conversation. Skipping it
+      // would shift every later preview onto the wrong message.
+      rememberPreview(r.conversation_id, previewUrl);
+
+      setTurns((t) => [
+        // The photo STAYS; the transcription is added beneath it. The picture is
+        // what the child sent, the text is what GuruJi understood, and seeing
+        // both is the only way to tell a misread of their handwriting from a
+        // wrong answer.
+        ...t.map((turn) =>
+          turn.id === placeholderId && r.transcribed_text
+            ? { ...turn, text: r.transcribed_text }
+            : turn,
+        ),
+        {
+          id: nextId(),
+          from: "guruji" as const,
+          text: r.reply,
+          state: stateFor(r.reply, r.grounding),
+          grounding: r.grounding,
+          citation: r.citation,
+          excerpt: r.source_excerpt,
+        },
+      ]);
+      refreshConversations();
+      if (!targetId) {
+        skipNextLoad.current = r.conversation_id;
+        navigate(`/chat/${r.conversation_id}`, true);
+      }
+    } catch (err) {
+      // Drop the placeholder and release its preview. Leaving the photo above an
+      // error reads as though it was sent and then failed downstream.
+      setTurns((t) => t.filter((turn) => turn.id !== placeholderId));
+      releaseObjectUrl(previewUrl);
+      setError(err instanceof Error ? err.message : "That photo didn't send.");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -509,7 +757,29 @@ export function Chat(): JSX.Element {
         </div>
       </header>
 
-      <div class="scroll" ref={scrollRef}>
+      {/* Drag and drop onto the conversation. The browser's default for a dropped
+          image is to NAVIGATE to it, replacing the app — so preventDefault on
+          dragover is not decoration, it is what stops a mis-drop losing the chat. */}
+      <div
+        class="scroll"
+        ref={scrollRef}
+        data-dropping={dragDepth > 0 ? "true" : undefined}
+        onDragEnter={(e: DragEvent) => {
+          if (!e.dataTransfer?.types.includes("Files")) return;
+          e.preventDefault();
+          setDragDepth((d) => d + 1);
+        }}
+        onDragOver={(e: DragEvent) => {
+          if (e.dataTransfer?.types.includes("Files")) e.preventDefault();
+        }}
+        onDragLeave={() => setDragDepth((d) => Math.max(0, d - 1))}
+        onDrop={(e: DragEvent) => {
+          if (!e.dataTransfer?.types.includes("Files")) return;
+          e.preventDefault();
+          setDragDepth(0);
+          acceptImage(e.dataTransfer.files?.[0]);
+        }}
+      >
         <div class="pane log">
           {empty ? (
             <div class="empty screen-in">
@@ -523,7 +793,26 @@ export function Chat(): JSX.Element {
 
           {turns.map((t) => (
             <div class="turn" data-from={t.from} key={t.id}>
-              <div class="bubble">{t.text}</div>
+              {t.image ? (
+                <img
+                  class="photo"
+                  src={t.image}
+                  alt="The question you photographed"
+                  /* No loading="lazy": the blob is already in memory, there is
+                     nothing to defer, and a deferred load is one more way for a
+                     revoked URL to surface as a broken glyph. */
+                  onError={() => dropDeadPreview(t.id)}
+                />
+              ) : null}
+              {/* A photo turn has no text until the transcription comes back, and
+                  an empty bubble under the picture is just a grey box. */}
+              {t.text ? <div class="bubble">{t.text}</div> : null}
+              {/* Survives a reload, unlike the picture. Without it a transcript
+                  read later shows text the child never typed, with nothing to say
+                  where it came from. */}
+              {t.fromPhoto && !t.image ? (
+                <span class="rail" data-state="hold">Sent as a photo</span>
+              ) : null}
               {t.state && t.state !== "answer" ? (
                 <span class="rail" data-state={RAIL[t.state].tone}>
                   {RAIL[t.state].text}
@@ -592,19 +881,38 @@ export function Chat(): JSX.Element {
                       role="menuitem"
                       onClick={() => {
                         setToolsOpen(false);
-                        say(t.soon);
+                        if (t.soon) say(t.soon);
+                        else if (t.key === "photo") photoRef.current?.click();
                       }}
                     >
                       <ToolIcon name={t.key} />
                       <span>{t.label}</span>
-                      <em>Soon</em>
+                      {t.soon ? <em>Soon</em> : null}
                     </button>
                   ))}
                 </div>
               ) : null}
+              {/* capture="environment" asks a phone for the rear camera directly,
+                  which is the whole point on the device this product targets. On a
+                  desktop it degrades to an ordinary file picker. */}
+              <input
+                ref={photoRef}
+                type="file"
+                accept={ACCEPTED_IMAGE_TYPES.join(",")}
+                capture="environment"
+                hidden
+                onChange={(e: Event) => {
+                  const input = e.currentTarget as HTMLInputElement;
+                  const file = input.files?.[0];
+                  // Reset first: without this, picking the SAME file twice fires
+                  // no change event and the second attempt silently does nothing.
+                  input.value = "";
+                  acceptImage(file);
+                }}
+              />
               <button
                 class="tool"
-                aria-label="Add a photo, file, note or voice"
+                aria-label="Add a photo, note or voice"
                 aria-haspopup="menu"
                 aria-expanded={toolsOpen}
                 title="Add to your question"

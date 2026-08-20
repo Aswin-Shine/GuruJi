@@ -27,7 +27,7 @@ const QUALITY = 0.82;
  *  odd cases (a dense photo of a whole page), not the expected size. */
 const MAX_BYTES = 5_000_000;
 
-export class PhotoTooBig extends Error { }
+export class PhotoTooBig extends Error {}
 
 export async function downscale(file: File): Promise<Blob> {
   const bitmap = await createImageBitmap(file);
@@ -57,9 +57,3 @@ export async function downscale(file: File): Promise<Blob> {
   if (blob.size > MAX_BYTES) throw new PhotoTooBig("That photo is too large.");
   return blob;
 }
-
-/** The only types accepted, anywhere. Kept here rather than inline in the markup
- *  so the file input's `accept`, the paste handler and the drop handler cannot
- *  drift apart and start disagreeing about what is allowed — the server checks
- *  the same three, plus their magic bytes. */
-export const ACCEPTED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];

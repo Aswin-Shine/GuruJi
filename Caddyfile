@@ -16,7 +16,6 @@
 #  "anyone on the internet" to "anyone holding the shared password". Replace it
 #  with per-phone codes and APP_ENV=production before the cohort grows.
 # =============================================================================
-
 {
 	# Where Let's Encrypt sends expiry warnings. A real address you read.
 	email {$ACME_EMAIL}
@@ -50,7 +49,6 @@
 	# completely broken after login. The two OTP endpoints are the only ones the
 	# client calls with `auth: false`, so they carry no Authorization header of
 	# their own and the browser's Basic credentials pass through cleanly.
-	
 	@site not path /api/*
 	@authapi path /api/v1/auth/*
 
@@ -79,6 +77,13 @@
 
 	# Matches nginx's own client_max_body_size 32k. Messages are text and capped
 	# at 2000 characters server-side; there are no uploads anywhere in this app.
+	# The photo endpoint carries an image; everything else is short text. Two
+	# limits rather than one raised limit, so a 2 MB body is only accepted on the
+	# single route that has a use for it.
+	@photo path /api/v1/conversations/photo
+	request_body @photo {
+		max_size 6MB
+	}
 	request_body {
 		max_size 64KB
 	}

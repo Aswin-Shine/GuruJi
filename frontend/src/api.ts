@@ -85,8 +85,12 @@ interface Options {
 async function request<T>(path: string, opts: Options = {}): Promise<T> {
   const { method = "GET", body, auth = true, slow = false } = opts;
 
+  // FormData carries its own multipart Content-Type WITH a generated boundary.
+  // Setting the header manually omits the boundary and the server cannot parse
+  // the body, so this branch must leave it alone.
+  const isForm = body instanceof FormData;
   const headers: Record<string, string> = { Accept: "application/json" };
-  if (body !== undefined) headers["Content-Type"] = "application/json";
+  if (body !== undefined && !isForm) headers["Content-Type"] = "application/json";
   if (auth) {
     const token = session.token();
     if (!token) throw new ApiError(401, "Not signed in");
@@ -98,7 +102,14 @@ async function request<T>(path: string, opts: Options = {}): Promise<T> {
     res = await fetch(BASE + path, {
       method,
       headers,
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      ...(body !== undefined ? { body: isForm ? (body as FormData) : JSON.stringify(body) } : {}),
+      // "same-origin", not "omit". The app's own auth is a bearer header and it
+      // sets no cookies, so this looks like it should be "omit" — but credentials
+      // in the fetch spec also cover HTTP authentication entries, and "omit"
+      // stops the browser attaching the cached Basic credentials that the pilot
+      // gate in front of this deployment requires. With "omit", the two OTP
+      // calls below are rejected by the proxy and never reach the API at all,
+      // which surfaces as a login that fails with nothing in the server log.
       credentials: "same-origin",
       cache: "no-store",
       redirect: "error", // a redirect on an API path is a misconfiguration, not a flow
@@ -110,7 +121,16 @@ async function request<T>(path: string, opts: Options = {}): Promise<T> {
     }
     throw new ApiError(0, "No connection. Check your internet and try again.");
   }
-  
+
+  // 401 on an AUTHENTICATED call means the token is expired, revoked or forged.
+  // Drop it here, once, rather than letting every screen invent its own sign-out
+  // path.
+  //
+  // Gated on `auth` because the two unauthenticated calls — otp/request and
+  // otp/verify — also answer 401, there meaning "wrong code". Treating that as a
+  // dead session shows "Your session ended" to someone who never had one, and
+  // clears a session that may be valid in another tab. Those callers report
+  // their own error instead.
   if (res.status === 401 && auth) {
     session.clear();
     throw new ApiError(401, "Your session ended. Sign in again.");
@@ -257,6 +277,33 @@ export const api = {
         ...(opts.grade ? { grade: opts.grade } : {}),
         ...(opts.subject ? { subject: opts.subject } : {}),
       },
+      slow: true,
+    });
+  },
+
+  /** A photographed question.
+   *
+   *  The image is downscaled on this device first (see photo.ts) and is NOT
+   *  stored anywhere by the server: it is transcribed to text, the text runs
+   *  through the ordinary tutoring pipeline, and the bytes are dropped. The
+   *  response carries `transcribed_text` so the chat can show the child what
+   *  GuruJi read, which is the only way they can tell a misread from a wrong
+   *  answer.
+   *
+   *  `slow: true` because this waits on a vision call ahead of the usual
+   *  moderation, retrieval and tutoring calls. */
+  sendPhoto: (
+    image: Blob,
+    opts: { newSession?: boolean; conversationId?: string } = {},
+  ) => {
+    localLimitCheck();
+    const form = new FormData();
+    form.append("photo", image, "question.jpg");
+    if (opts.newSession) form.append("new_session", "true");
+    if (opts.conversationId) form.append("conversation_id", opts.conversationId);
+    return request<SendMessageOut>("/v1/conversations/photo", {
+      method: "POST",
+      body: form,
       slow: true,
     });
   },
