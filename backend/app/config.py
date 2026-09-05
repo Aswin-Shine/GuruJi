@@ -40,7 +40,11 @@ LOWEST_GRADE: int = int(os.environ.get("LOWEST_GRADE", "5"))
 RAG_CANDIDATE_MULTIPLIER: int = int(os.environ.get("RAG_CANDIDATE_MULTIPLIER", "3"))
 
 # GROUNDED floor: at or above this, answer normally from the textbook.
-RAG_THRESHOLD: float = float(os.environ.get("RAG_THRESHOLD", "0.35"))
+# 0.40, not 0.35: every recorded eval run (docs/evaluation-runs.md) was measured
+# at 0.40. A bare default of 0.35 would let an environment that never reads
+# .env.example silently run an unevaluated, worse-performing threshold (sweep:
+# 86.1% refusal accuracy vs the recorded 88.9% at 0.40 — see docs/EVALUATION.md §6).
+RAG_THRESHOLD: float = float(os.environ.get("RAG_THRESHOLD", "0.40"))
 
 # WEAK floor: between this and RAG_THRESHOLD, answer briefly with an honest
 # "not exactly your chapter" hedge instead of refusing. Set equal to RAG_THRESHOLD
@@ -52,6 +56,14 @@ RAG_WEAK_THRESHOLD: float = float(os.environ.get("RAG_WEAK_THRESHOLD", "0.28"))
 # score can miss, and the weak band hedges rather than asserts, so the downside is a
 # cautious reply rather than a fabricated one. It is a switch because the eval has
 # not settled the question — set to 0 if refusal accuracy drops below ~90%.
+#
+# DEFAULT FLIPPED 2026-08-24: the last recorded run measured refusal accuracy at
+# 88.9%, below that documented line, and the switch had not been flipped despite
+# the condition firing. Turned off by default per this file's own stated policy.
+# The sweep in docs/EVALUATION.md only varies RAG_THRESHOLD/RAG_WEAK_THRESHOLD, not
+# this flag, so the exact refusal-accuracy/recall effect of turning rescue off is
+# UNMEASURED — re-run `eval_retrieval.py --verbose` after this change and record
+# the new numbers in docs/evaluation-runs.md before trusting them.
 RAG_LEXICAL_RESCUE: bool = os.environ.get("RAG_LEXICAL_RESCUE", "1") == "1"
 
 # ---------------------------------------------------------------------------

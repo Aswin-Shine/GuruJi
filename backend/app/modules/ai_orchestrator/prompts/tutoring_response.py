@@ -12,6 +12,29 @@ query at all" must not produce the same refusal:
              while wearing textbook authority. A threshold cannot fix that — the
              offending scores sit above any cutoff you would raise it to, and they move
              run to run. The fix belongs in the instruction.
+
+             DOMAIN CHECK added 2026-08-21, after the Mathematics eval (see
+             docs/evaluation-runs.md) confirmed the same failure shape five separate
+             times across two grades: a single shared WORD, not a shared topic. "The
+             Baudhayana-Pythagoras Theorem" scored 0.4-0.55 as "grounded" against
+             "trigonometry ke ratios" because both involve right-angled triangles;
+             "We Distribute, Yet Things Multiply" against "matrix multiplication"
+             because both involve multiplying; a chapter on real-number classification
+             against "complex number ka matlab" because both are about "numbers". The
+             original clause's own examples (a missing number, name, list, process)
+             describe a DETAIL missing from an otherwise-relevant context, not a whole
+             different mathematical topic wearing the retrieved chapter's vocabulary.
+             The new bullet names that second, coarser case explicitly, with real
+             confirmed examples rather than a generic instruction to be careful.
+
+             UNTESTABLE by eval_retrieval.py, which is worth stating plainly rather
+             than discovering later: that harness scores retrieval — whether a cosine
+             score crossed RAG_THRESHOLD — and never calls this file's
+             build_tutoring_prompt() or an LLM at all. Every one of the false-grounding
+             scores above is unchanged by this edit, by construction; the fix changes
+             what the model SAYS once grounding is already "grounded", a layer the
+             retrieval harness cannot see. Verification needs a real generation call —
+             see scripts/verify_context_guard.py.
   WEAK       chunks between RAG_WEAK_THRESHOLD and RAG_THRESHOLD. Answer briefly and
              honestly flag that it is not exactly their current chapter. Refusing
              everything under a single scalar punished curiosity, which is the one
@@ -77,10 +100,20 @@ GROUNDED_INSTRUCTION = (
     "explanation in it. Each block is prefixed with its chapter in square brackets — "
     "mention the chapter naturally once (e.g. 'yeh Chapter 6 mein hai'), then teach. "
     "Never print the square-bracket line verbatim.\n"
-    "STAY INSIDE THE CONTEXT: state only facts that actually appear in it. If the "
-    "question asks for something the context does not contain — a number, a name, a "
-    "list, a process — say plainly that that part isn't in their book yet, and teach "
-    "what the context DOES cover. Do not fill the gap from your own knowledge."
+    "STAY INSIDE THE CONTEXT, at two levels:\n"
+    "1. DETAIL — state only facts that actually appear in it. If the question asks for "
+    "something the context does not contain (a number, a name, a list, a process), say "
+    "plainly that part isn't in their book yet, and teach what the context DOES cover.\n"
+    "2. DOMAIN — a shared WORD is not a shared TOPIC. Context about multiplying "
+    "algebraic terms (the distributive law) is not context about multiplying matrices. "
+    "A chapter about perfect squares and cubes as NUMBERS is not a chapter about "
+    "solving quadratic equations. 'Real numbers' is not 'complex numbers'. The "
+    "Pythagoras theorem is not trigonometric ratios, even though both involve "
+    "right-angled triangles. Before answering, check whether the CONTEXT's actual "
+    "subject matches what the question is really asking — not whether a word in the "
+    "question also appears in the context. If the subject differs, treat it exactly "
+    "like case 1: say plainly that isn't in their book yet.\n"
+    "Do not fill either gap from your own knowledge."
 )
 
 WEAK_INSTRUCTION = (

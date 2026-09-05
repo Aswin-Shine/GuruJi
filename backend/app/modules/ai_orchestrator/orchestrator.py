@@ -164,7 +164,18 @@ def plan_query(
             query = message_text
         return QueryPlan(needs_textbook=needs, query=query)
     except Exception as exc:
-        log.warning("query planner failed, falling back to raw message: %s", exc)
+        # message_text included, truncated to 80 chars: this line fires on a rare
+        # failure path (WARNING, not per-turn INFO), and without it there is no way
+        # to tell WHICH message triggered a planner outage — in production, that
+        # means no way to debug a real failure from CloudWatch alone; in an eval run
+        # of 165 rows, no way to tell a genuine retrieval miss apart from five rows
+        # silently degraded to raw-message search, which is exactly what happened
+        # on the first full three-class Mathematics run and cost a full re-read of
+        # the results to even suspect. Truncated because a message could in theory
+        # run to the API's 2000-char cap, and a log line that long defeats grepping
+        # it back out.
+        preview = message_text[:80] + ("…" if len(message_text) > 80 else "")
+        log.warning("query planner failed for %r, falling back to raw message: %s", preview, exc)
         return fallback
 
 
