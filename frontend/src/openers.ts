@@ -1,5 +1,5 @@
 /**
- * Empty-state openers, per class.
+ * Empty-state openers, per class AND subject.
  *
  * The chat's first screen used three hardcoded prompts — "Pressure kya hota hai?",
  * "Cyclone kaise banta hai?", "Friction samjhao" — which are Class 8 Science.
@@ -15,9 +15,16 @@
  * the opener's whole job is to look like something they'd actually ask.
  *
  * So: written by hand, but every one of them checked against the chapter that
- * covers it in the ingested corpus (73 chapters across classes 5-10). The chapter
- * is named in the comment beside each block so a future edition change can be
- * traced rather than guessed at.
+ * covers it in the ingested corpus. The chapter is named in the comment beside
+ * each block so a future edition change can be traced rather than guessed at.
+ *
+ * SUBJECT, NOT JUST GRADE
+ *
+ * Retrieval and the class-picker are both subject-aware (see curriculum.subjects()
+ * and the subject menu in Chat.tsx) — Mathematics has been ingested for every
+ * class alongside Science/EVS. The opener pool must key on subject too, or a
+ * student who explicitly picks Mathematics still gets shown "Pressure kya hota
+ * hai?", which is not just wrong, it actively tells them nothing was heard.
  *
  * THE DRIFT RISK, STATED
  *
@@ -32,9 +39,9 @@
  * impression. Re-check this file whenever a class is re-ingested.
  */
 
-/** Six per class; three are shown, chosen at random per new chat, so the empty
- *  state does not look identical every single time a student opens it. */
-export const OPENERS: Record<number, readonly string[]> = {
+type OpenerBank = Record<number, readonly string[]>;
+
+const EVS: OpenerBank = {
   // Class 5 — Our Wondrous World (EVS, not Science)
   5: [
     "Nadi kahan se aati hai?",
@@ -44,6 +51,9 @@ export const OPENERS: Record<number, readonly string[]> = {
     "Prithvi hamara ghar kyun hai?",
     "Paani kyun zaroori hai?",
   ],
+};
+
+const SCIENCE: OpenerBank = {
   // Class 6 — Curiosity: ch04 Magnets, ch07 Temperature, ch08 States of Water,
   // ch09 Separation, ch11 Nature's Treasures, ch12 Beyond Earth
   6: [
@@ -96,11 +106,93 @@ export const OPENERS: Record<number, readonly string[]> = {
   ],
 };
 
-/** Three openers for this class. Falls back to Class 8 only when the grade is
- *  genuinely unknown — a brand-new browser that has not resolved the profile
- *  yet — because showing nothing is worse than showing something plausible. */
-export function openersFor(grade: number | undefined): string[] {
-  const pool = OPENERS[grade ?? 0] ?? OPENERS[8]!;
+const MATHEMATICS: OpenerBank = {
+  // Class 5 — ch02 Fractions, ch03 Angles as Turns, ch07 Shapes and Patterns,
+  // ch08 Weight and Capacity, ch10 Symmetrical Design, ch12 Racing Seconds
+  5: [
+    "Fraction kya hoti hai?",
+    "Angle kaise banta hai?",
+    "Shapes mein pattern kaise dhoondhein?",
+    "Weight aur capacity mein kya farak hai?",
+    "Symmetry kya hoti hai?",
+    "Time kaise naapte hain?",
+  ],
+  // Class 6 — ch02 Lines and Angles, ch04 Data Handling, ch05 Prime Time,
+  // ch06 Perimeter and Area, ch09 Symmetry, ch10 The Other Side of Zero
+  6: [
+    "Line aur angle mein kya farak hai?",
+    "Data ko graph mein kaise dikhayein?",
+    "Prime number kya hota hai?",
+    "Perimeter aur area kaise nikalte hain?",
+    "Symmetry kaise pehchaanein?",
+    "Negative numbers kya hote hain?",
+  ],
+  // Class 7 — ch02 Simple Expressions, ch03 Peek Beyond the Point,
+  // ch05 Parallel and Intersecting Lines, ch09 Geometric Twins,
+  // ch10 Operations with Integers, ch15 Finding the Unknown
+  7: [
+    "Algebraic expression kya hoti hai?",
+    "Decimal numbers kaise kaam karte hain?",
+    "Parallel lines kaise pehchaanein?",
+    "Congruent shapes kya hoti hain?",
+    "Integers ko multiply kaise karein?",
+    "Equation solve kaise karte hain?",
+  ],
+  // Class 8 — ch01 A Square and a Cube, ch02 Power Play, ch04 Quadrilaterals,
+  // ch09 The Baudhayana-Pythagoras Theorem, ch10 Proportional Reasoning,
+  // ch13 Algebra Play
+  8: [
+    "Square aur cube mein kya farak hai?",
+    "Exponent ka matlab kya hota hai?",
+    "Quadrilateral kise kehte hain?",
+    "Pythagoras theorem kya kehta hai?",
+    "Ratio aur proportion mein kya farak hai?",
+    "Algebra ke basic rules kya hain?",
+  ],
+  // Class 9 — ch01 Orienting Yourself (Coordinates), ch02 Linear Polynomials,
+  // ch03 The World of Numbers, ch04 Algebraic Identities, ch07 Probability,
+  // ch08 Sequences and Progressions
+  9: [
+    "Coordinate geometry kya hoti hai?",
+    "Polynomial kya hota hai?",
+    "Real numbers kya hote hain?",
+    "Algebraic identities kya hoti hain?",
+    "Probability kaise calculate karte hain?",
+    "Sequence aur progression mein kya farak hai?",
+  ],
+  // Class 10 — ch04 Quadratic Equations, ch05 Arithmetic Progressions,
+  // ch06 Triangles, ch08 Introduction to Trigonometry, ch10 Circles,
+  // ch13 Statistics
+  10: [
+    "Quadratic equation kaise solve karte hain?",
+    "AP (Arithmetic Progression) kya hoti hai?",
+    "Similar triangles kaise pehchaanein?",
+    "Trigonometry mein sin cos kya hota hai?",
+    "Circle ki tangent kya hoti hai?",
+    "Mean, median aur mode mein kya farak hai?",
+  ],
+};
+
+/** Keyed by the exact subject string the corpus and curriculum.subjects() use. */
+const BANKS: Record<string, OpenerBank> = { EVS, Science: SCIENCE, Mathematics: MATHEMATICS };
+
+/** Subject preference when the chat has no subject pinned yet ("All subjects").
+ *  EVS first because Class 5 has no Science bank; Science next because that was
+ *  the only subject in the corpus before Mathematics was ingested, so an
+ *  unscoped chat keeps its original behaviour rather than changing underfoot. */
+const UNSCOPED_ORDER = ["EVS", "Science", "Mathematics"];
+
+/** Three openers for this class and subject. Falls back through: the requested
+ *  subject's bank for this grade -> the unscoped preference order for this grade
+ *  -> Class 8 Science -> because showing nothing is worse than showing something
+ *  plausible, but showing the wrong SUBJECT's questions after the student picked
+ *  one explicitly is the exact bug this file exists to avoid. */
+export function openersFor(grade: number | undefined, subject?: string): string[] {
+  const g = grade ?? 8;
+  const pool =
+    (subject ? BANKS[subject]?.[g] : undefined) ??
+    UNSCOPED_ORDER.map((s) => BANKS[s]?.[g]).find((bank) => bank !== undefined) ??
+    SCIENCE[8]!;
   const picked = [...pool];
   // Fisher-Yates, so the three shown are not always the first three.
   for (let i = picked.length - 1; i > 0; i--) {

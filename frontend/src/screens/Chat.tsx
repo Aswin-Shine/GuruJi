@@ -242,7 +242,8 @@ export function Chat(): JSX.Element {
   const [catalog, setCatalog] = useState<CurriculumSubject[] | null>(null);
   const [chatSubject, setChatSubject] = useState<string | undefined>(undefined);
   /* Chosen once per mount, so a new chat gets a different three but they do not
-     reshuffle under the student's finger on every re-render. */
+     reshuffle under the student's finger on every re-render. Reseeded by the
+     effect below whenever chatGrade or chatSubject actually changes. */
   const [prompts, setPrompts] = useState<string[]>(() => openersFor(s?.grade));
   /* The class for THIS chat. Defaults to the profile, but a sibling can switch it
      before their first message without overwriting the other child's profile. Only
@@ -327,8 +328,20 @@ export function Chat(): JSX.Element {
   useEffect(() => {
     if (!s?.grade) return;
     setChatGrade((g) => g ?? s.grade);
-    setPrompts(openersFor(chatGrade ?? s.grade));
   }, [s?.grade]);
+
+  /* Reseed the opener pool whenever the EFFECTIVE class or subject changes —
+     one place, not one per call site. Every prior version of this called
+     setPrompts by hand from each handler that could change chatGrade or
+     chatSubject, and it was missing from three of them (the catalog auto-pin
+     below, and both subject-menu clicks), which is exactly how a student who
+     explicitly picked Mathematics kept seeing Science openers: chatSubject
+     updated, nothing re-ran openersFor(). Depending on the state itself instead
+     of the handlers that set it means a future subject-setting call site gets
+     this for free. */
+  useEffect(() => {
+    setPrompts(openersFor(chatGrade, chatSubject));
+  }, [chatGrade, chatSubject]);
 
   /* Subjects available for the currently selected class. */
   const subjectsHere = (catalog ?? [])
@@ -337,7 +350,6 @@ export function Chat(): JSX.Element {
 
   function pickGrade(g: number): void {
     setChatGrade(g);
-    setPrompts(openersFor(g));
     // Changing class can invalidate the subject — Class 5 has EVS, Class 8 does
     // not. Clearing rather than guessing: null means "every subject", which is
     // the honest default when we no longer know what they meant.
@@ -378,7 +390,6 @@ export function Chat(): JSX.Element {
         if (cancelled) return;
         session.rememberProfile({ grade: me.grade });
         setChatGrade((g) => g ?? me.grade);
-        setPrompts(openersFor(me.grade));
       } catch {
         /* keep the fallback openers; a failed profile lookup must not break chat */
       }
@@ -683,16 +694,17 @@ export function Chat(): JSX.Element {
                     >
                       <span>Class {g}</span>
                       {/* The subject label comes from the corpus, not a hardcoded
-                          `g === 5 ? "EVS"`. When Class 5 Maths is ingested this
-                          becomes "EVS +1" with no frontend change; when a class
-                          has none it says so instead of implying a book exists. */}
+                          `g === 5 ? "EVS"`. A single subject is still named here,
+                          because picking the class is the only click needed to
+                          land on it. Two or more show nothing — that list is one
+                          click away in the SUBJECT section below once this class
+                          is selected, so repeating a count here is a badge that
+                          says nothing a click wouldn't show immediately after. */}
                       {subs.length === 0 ? (
                         <em data-tone="none">soon</em>
                       ) : subs.length === 1 ? (
                         <em>{subs[0]!.subject}</em>
-                      ) : (
-                        <em>{subs.length} subjects</em>
-                      )}
+                      ) : null}
                     </button>
                   );
                 })}
