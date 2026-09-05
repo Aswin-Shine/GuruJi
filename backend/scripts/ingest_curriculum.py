@@ -50,11 +50,24 @@ def clean_pdf_noise(raw_text: str) -> str:
     land mid-sentence at page boundaries and would otherwise get embedded and
     later injected into a tutoring prompt verbatim.
 
-    Two date formats confirmed present in the same PDF (checked all 7 pages
-    of a real chapter, not assumed from one): "6/28/2025   11:38:53 AM" on
-    most pages, "10-Sep-25   2:13:15 PM" on the last one — InDesign stamps
-    whatever the machine's last-save time was, in whatever format that
-    machine used, so this isn't guaranteed consistent even within one file.
+    Two date formats confirmed present in the Science corpus (checked all 7 pages
+    of a real chapter, not assumed from one): "6/28/2025   11:38:53 AM" on most
+    pages, "10-Sep-25   2:13:15 PM" on the last one. A third format was confirmed
+    when the Maths corpus arrived: "13-08-2024   16:10:52" (DD-MM-YYYY, no AM/PM)
+    — present in 21 of 75 Maths chapters checked directly, absent from the Science
+    scan, which is why it wasn't caught the first time. InDesign stamps whatever
+    the machine's last-save time was, in whatever format that machine used, so
+    this is not guaranteed to be the last variant either.
+
+    The .indd stamp itself also varies more than the Science corpus suggested.
+    Science files used a bare "Chapter6.indd" shape. 38 of 75 Maths chapters
+    (51%, checked directly) embed the chapter title in the stamp instead —
+    "Chapter-1 We the Travellers-1.indd", "Chapter 8_Playing with Constructions.indd"
+    — which the original bare "Chapter N.indd" pattern does not match at all.
+    A few chapters also carry a SECOND stamp from a non-chapter source InDesign
+    file, e.g. "Learning Material Sheets.indd 273" for an appended worksheet
+    section — found only by scanning every page of every chapter, not just page
+    one, since it doesn't appear until the chapter's last few pages.
 
     The running page header repeats on every page. Left in, it lands in roughly one
     chunk in two and adds a constant vector component to half the corpus, compressing
@@ -62,9 +75,13 @@ def clean_pdf_noise(raw_text: str) -> str:
     has to sit inside. Chapter identity is not lost: it is re-added deliberately, once,
     as the contextual header in chunk_document().
     """
-    raw_text = re.sub(r"Chapter \d+\.indd\s+\d+", "", raw_text)
+    # Any InDesign filename+pagenum stamp — not gated on starting with "Chapter",
+    # since the appendix case above proved that assumption wrong. Bounded to 60
+    # chars and non-greedy so it can't run past the .indd boundary into real prose.
+    raw_text = re.sub(r"[A-Za-z][\w \-]{0,60}?\.indd\s+\d+", "", raw_text)
     raw_text = re.sub(
-        r"(?:\d{1,2}/\d{1,2}/\d{4}|\d{1,2}-[A-Za-z]{3}-\d{2})\s+\d{1,2}:\d{2}:\d{2}\s*(?:AM|PM)?",
+        r"(?:\d{1,2}/\d{1,2}/\d{4}|\d{1,2}-[A-Za-z]{3}-\d{2}|\d{1,2}-\d{1,2}-\d{4})"
+        r"\s+\d{1,2}:\d{2}:\d{2}\s*(?:AM|PM)?",
         "",
         raw_text,
     )
