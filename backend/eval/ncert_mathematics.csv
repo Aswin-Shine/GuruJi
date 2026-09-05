@@ -1,0 +1,369 @@
+id,question,context,subject,grade,gold_chapter,kind
+# GuruJi retrieval eval set — Class 8 Mathematics, v1.
+#
+# Columns: id, question, context, grade, gold_chapter, kind
+#   grade         the class the STUDENT is in when asking.
+#   gold_chapter  chapter that must be retrieved; >0 in-corpus, 0 non-question,
+#                 -1 genuinely absent from the corpus.
+#
+# SCOPE. This is the first Maths eval set in the project and deliberately
+# narrow: only Class 8 is ingested at this point, so every in-corpus row is
+# grade 8. There are no cross_class rows yet — that kind only means something
+# once a second Maths class is ingested to be confused with (or correctly
+# fall back to). Add cross_class rows the same way the Science set did: after
+# the next class lands, not before, so every row is checked against real
+# ingested content rather than assumed.
+#
+# CHAPTER MAP (see manifests/mathematics/class08_manifest.csv — part-1 is
+# chapters 1-7, part-2 continues as 8-14; the printed textbook restarts each
+# part's own numbering at 1, but the manifest numbers continuously so
+# already_ingested() cannot collide across parts):
+#   1  A Square and a Cube               8  Fractions in Disguise
+#   2  Power Play                        9  The Baudhayana-Pythagoras Theorem
+#   3  A Story of Numbers               10  Proportional Reasoning
+#   4  Quadrilaterals                   11  Exploring Some Geometric Themes
+#   5  Number Play                      12  Tales by Dots and Lines
+#   6  We Distribute, Yet Things Multiply  13  Algebra Play
+#   7  Proportional Reasoning-1         14  Rectangle and Squares
+#
+# gold_chapter is assigned from the chapter's actual subject matter (verified
+# against extracted PDF text, not the sometimes-oblique NCF title alone — e.g.
+# ch3 "A Story of Numbers" is rational/irrational number theory, not narrative
+# history; ch12 "Tales by Dots and Lines" is mean/median/data, not geometry).
+#
+# RELABELED after the 2026-08-21 baseline run found both original labels
+# wrong, confirmed by grepping ingested chunk text rather than guessed from
+# titles a second time (see docs/evaluation-runs.md):
+#   row 14 ("number line par fraction...") ch.3 -> ch.8. ch.3 has ~0 fraction
+#     content; ch.8 "Fractions in Disguise" has 72 matching chunks. The
+#     original retrieval result (ch.8) was correct; the eval scored it a miss.
+#   row 46 ("cube ka volume...") ch.1 -> ch.11. ch.1 "A Square and a Cube" is
+#     cube NUMBERS (48 hits on "cube", the number-theory sense, matching the
+#     title). ch.11 has 22 hits and is the geometric-solid sense the question
+#     actually asks about. Caveat: has_volume=0 in EVERY chapter of this
+#     corpus — no chapter covers cube-volume as dedicated content, so ch.11
+#     is the closest available target, not a confirmed clean match. Revisit
+#     if this row keeps scoring as a near-miss after the corpus grows.
+#
+# RE-RELABELED to out_of_corpus (2026-08-21, after 3 eval runs). Rows 11-12
+# were 'rational number kya hota hai' and 'is every whole number rational',
+# gold_chapter=3. Checked directly: ILIKE '%rational%' and '%irrational%'
+# return ZERO matches across all 14 Class 8 chapters — the term is absent
+# from the corpus entirely, not just under-represented in chapter 3. These
+# were never answerable questions; -1/out_of_corpus is the honest label.
+# Open question, not yet checked: whether the 2025 NCF restructure moved
+# rational/irrational number classification to a different class, the same
+# pattern already confirmed for Class 9 Science's missing Kelvin-conversion
+# content — or whether this is an ingestion/chunking loss. Worth a direct
+# look at the source PDF for ch.3 before assuming either direction.
+1,quadrilateral ke angles ka sum kitna hota hai?,,Mathematics,8,4,hinglish
+2,What is the sum of interior angles of a quadrilateral?,,Mathematics,8,4,direct
+3,parallelogram ki properties kya hain,,Mathematics,8,4,hinglish
+4,how do you classify a trapezium,,Mathematics,8,4,direct
+5,rhombus aur square mein kya farak hai,,Mathematics,8,4,hinglish
+6,exponent ka rule kya hota hai power multiply karne ke liye?,,Mathematics,8,2,hinglish
+7,What happens when you raise a power to another power?,,Mathematics,8,2,direct
+8,negative exponent ka matlab kya hota hai,,Mathematics,8,2,hinglish
+9,how many times can paper actually be folded in half,,Mathematics,8,2,adjacent
+10,scientific notation kaise likhte hain bade numbers ke liye,,Mathematics,8,2,vocab_free
+11,rational number kya hota hai?,,Mathematics,8,-1,out_of_corpus
+12,Is every whole number a rational number?,,Mathematics,8,-1,out_of_corpus
+13,irrational number ka matlab samjhao,,Mathematics,8,3,hinglish
+14,number line par fraction kaise dikhate hain,,Mathematics,8,8,vocab_free
+15,factorise kaise karte hain algebra mein?,,Mathematics,8,6,hinglish
+16,What is the distributive property in algebra?,,Mathematics,8,6,direct
+17,common factor nikalna algebra expression se,,Mathematics,8,6,hinglish
+18,a(b+c) ko kaise expand karte hain,,Mathematics,8,6,vocab_free
+19,ratio aur proportion mein kya difference hai,,Mathematics,8,7,hinglish
+20,How do you scale a figure up or down proportionally?,,Mathematics,8,7,direct
+21,do photos same size mein enlarge kaise karte hain proportionally,,Mathematics,8,7,vocab_free
+22,similar figures ka matlab kya hota hai,,Mathematics,8,7,adjacent
+23,percentage ko fraction mein kaise convert karte hain?,,Mathematics,8,8,hinglish
+24,What is 45% as a fraction in simplest form?,,Mathematics,8,8,direct
+25,discount aur profit percentage kaise nikalte hain,,Mathematics,8,8,hinglish
+26,50% off ka matlab kitna paisa bachega,,Mathematics,8,8,vocab_free
+27,Pythagoras theorem kya hai?,,Mathematics,8,9,hinglish
+28,State the Pythagoras theorem.,,Mathematics,8,9,direct
+29,right angle triangle mein hypotenuse kaise nikalte hain,,Mathematics,8,9,hinglish
+30,teeno sides ka square use karke triangle check karna right-angled hai ya nahi,,Mathematics,8,9,vocab_free
+31,ratio use karke naksha ki scale kaise samajhte hain,,Mathematics,8,10,vocab_free
+32,What is a proportional relationship between two quantities?,,Mathematics,8,10,direct
+33,speed distance time proportional kaise hota hai,,Mathematics,8,10,hinglish
+34,fractal pattern kya hota hai?,,Mathematics,8,11,hinglish
+35,What is a fractal and how does it repeat itself?,,Mathematics,8,11,direct
+36,3D solid ko 2D mein kaise dikhate hain,,Mathematics,8,11,hinglish
+37,mean aur median mein kya difference hai?,,Mathematics,8,12,hinglish
+38,How do you find the median of a data set?,,Mathematics,8,12,direct
+39,average nikalne ka formula kya hai,,Mathematics,8,12,vocab_free
+40,outlier ek data set mein kya karta hai average ke saath,,Mathematics,8,12,adjacent
+41,algebra trick jisse koi bhi number guess kar sakte hain,,Mathematics,8,13,hinglish
+42,Explain a number puzzle that uses algebra to work every time.,,Mathematics,8,13,direct
+43,square ko 4 barabar hisso mein kaise baato,,Mathematics,8,14,hinglish
+44,How many ways can a square be divided into four equal-area parts?,,Mathematics,8,14,direct
+45,area barabar rakhte hue shape ko alag tareeke se todna,,Mathematics,8,14,vocab_free
+46,cube ka volume kaise nikalte hain?,,Mathematics,8,11,hinglish
+47,What is a perfect square number?,,Mathematics,8,1,direct
+48,3 ko cube karne ka matlab kya hai,,Mathematics,8,1,hinglish
+49,hello guruji,,Mathematics,8,0,nonsearch
+50,thanks yaar bahut madad hui,,Mathematics,8,0,nonsearch
+51,samajh nahi aaya,"student: quadrilateral ke angles ka sum kitna hota hai?
+assistant: Yeh toh easy hai! Kisi bhi quadrilateral ke chaaron angles ka sum hamesha 360 degrees hota hai. Ek square lo — uske 4 angles kitne-kitne degree ke hain?",Mathematics,8,4,followup
+52,aur samjhao,"student: Pythagoras theorem kya hai?
+assistant: Bilkul! Right-angled triangle mein, hypotenuse ka square baaki dono sides ke squares ke sum ke barabar hota hai. Ek 3-4-5 triangle try karoge?",Mathematics,8,9,followup
+53,quadrilateral ke angles ka sum kitna hotha hai?,,Mathematics,8,4,typo
+54,pythagorus theorm kya hai,,Mathematics,8,9,typo
+55,black hole ka mass kaise calculate karte hain,,Mathematics,8,-1,out_of_corpus
+56,integral calculus kya hota hai,,Mathematics,8,-1,out_of_corpus
+57,matrix multiplication kaise karte hain,,Mathematics,8,-1,out_of_corpus
+58,trigonometry ke ratios kya hain — sin cos tan,,Mathematics,8,-1,out_of_corpus
+59,complex number ka matlab kya hota hai,,Mathematics,8,-1,out_of_corpus
+60,quadratic equation solve kaise karte hain,,Mathematics,8,-1,out_of_corpus
+
+# ---
+
+# v2 — Class 9 added (2026-08-21), ids 61-108.
+#
+# Same discipline as the Class 8 relabeling rounds above: every gold_chapter
+# was checked against real ingested chunk text before being written, via a
+# diagonal verification (each chapter's own search terms scored highest in
+# its own row, cleanly separated from the other seven chapters — no Class-9
+# equivalent of the cube/factorise collisions found in Class 8).
+#
+# No cross_class rows yet. Adding one requires confirming a topic is genuinely
+# absent from ONE of the two classes being compared, checked directly, not
+# assumed from a chapter-title list — exactly the mistake that cost three
+# rounds of relabeling in the Class 8 section above. The query to check the
+# first candidate (does 'quadrilateral' content exist in Class 9 at all,
+# making Class 8 ch.4 the correct two-pass widen-down target) is:
+#
+#   SELECT d.grade, d.chapter_no, d.title, count(*)
+#   FROM curriculum_chunks c JOIN curriculum_documents d ON d.id = c.document_id
+#   WHERE d.subject = 'Mathematics' AND d.grade IN (8,9)
+#     AND c.chunk_text ILIKE '%quadrilateral%'
+#   GROUP BY d.grade, d.chapter_no, d.title ORDER BY d.grade;
+#
+# Two-pass only widens DOWNWARD (own grade, then lower), never up. A Class 8
+# student asking about rational numbers (confirmed Class-9-only, see the
+# out_of_corpus rows in the Class 8 section) is correctly unreachable, not a
+# cross_class case — that direction belongs as out_of_corpus in the asking
+# student's own grade, not here.
+#
+# CLASS 9 CHAPTER MAP (manifests/mathematics/class09_manifest.csv):
+#   61-65 area   1  Orienting Yourself: The Use of Coordinates    (33 hits "coordinate")
+#   66-70 area   2  Introduction to Linear Polynomials            (55 hits "polynomial")
+#   71-75 area   3  The World of Numbers                          (42 hits "rational"/"irrational")
+#   76-79 area   4  Exploring Algebraic Identities                (50 hits "identit")
+#   80-83 area   5  I'm Up and Down, and Round and Round          (56 hits "circle")
+#   84-88 area   6  Measuring Space: Perimeter and Area           (82 hits "area"/"perimeter")
+#   89-92 area   7  The Mathematics of Maybe: Intro to Probability (48 hits "probability")
+#   93-96 area   8  Predicting What Comes Next: Sequences and Progressions (60 hits)
+#
+# ch.5/ch.6 OVERLAP, confirmed by the same pass: ch.6 scores 47 hits on
+# "circle", second-highest in its own row. Circle AREA specifically sits in
+# the overlap — questions naming both are marked adjacent, not forced to one
+# gold chapter (ids 87, 88 below).
+
+# GuruJi retrieval eval set — Class 9 Mathematics, v1.
+#
+# Columns: id, question, context, subject, grade, gold_chapter, kind
+#   grade         the class the STUDENT is in when asking.
+#   gold_chapter  chapter that must be retrieved; >0 in-corpus, 0 non-question,
+#                 -1 genuinely absent from the corpus.
+#
+# EVERY gold_chapter below was checked against real ingested chunk text before
+# being written, not guessed from the chapter title — the Class 8 file needed
+# three rounds of relabeling because two chapters shared a surface word for
+# unrelated concepts (cube-as-number vs cube-as-solid, factorise-arithmetic vs
+# factorise-algebra) and the first labels were written from titles alone. The
+# verification query and its full output are recorded in the project's session
+# history; the diagonal (each chapter's own search term scoring highest in its
+# own row, cleanly separated from every other chapter) came back clean for all
+# eight chapters here — no equivalent collision found in this class.
+#
+# SCOPE. No cross_class rows yet. That kind requires confirming a topic is
+# genuinely absent from ONE of the two classes being compared — asserting that
+# from a chapter-title list is exactly the mistake that produced the Class 8
+# relabeling rounds. Before adding cross_class rows, run:
+#
+#   SELECT d.grade, d.chapter_no, d.title, count(*)
+#   FROM curriculum_chunks c JOIN curriculum_documents d ON d.id = c.document_id
+#   WHERE d.subject = 'Mathematics' AND d.grade IN (8,9)
+#     AND c.chunk_text ILIKE '%quadrilateral%'
+#   GROUP BY d.grade, d.chapter_no, d.title ORDER BY d.grade;
+#
+# If Class 9 has zero hits, "quadrilateral angle sum" asked by a Class 9
+# student is a clean cross_class row: two-pass should widen down to Class 8
+# ch.4. Two-pass only widens DOWNWARD (own grade, then lower), never up — so
+# the reverse direction (a Class 8 student asking about rational numbers,
+# confirmed Class-9-only) is not a cross_class case at all. It is a correctly-
+# unreachable question for that student and belongs in a Class 8 out_of_corpus
+# row instead, not here.
+#
+# CHAPTER MAP (see manifests/mathematics/class09_manifest.csv):
+#   1  Orienting Yourself: The Use of Coordinates   (33 hits "coordinate")
+#   2  Introduction to Linear Polynomials           (55 hits "polynomial")
+#   3  The World of Numbers                         (42 hits "rational"/"irrational")
+#   4  Exploring Algebraic Identities                (50 hits "identit")
+#   5  I'm Up and Down, and Round and Round          (56 hits "circle")
+#   6  Measuring Space: Perimeter and Area           (82 hits "area"/"perimeter")
+#   7  The Mathematics of Maybe: Intro to Probability (48 hits "probability")
+#   8  Predicting What Comes Next: Sequences and Progressions (60 hits "sequence"/"progression")
+#
+# ch.5/ch.6 OVERLAP, confirmed by the same verification pass: ch.6 scores 47
+# hits on "circle", second-highest in its row after its own term. Circle AREA
+# specifically sits in the overlap — a genuine content boundary, not a labeling
+# error, so questions naming "circle" AND "area" together are marked adjacent
+# below rather than forced to one gold chapter.
+61,coordinate plane par point kaise plot karte hain?,,Mathematics,9,1,hinglish
+62,What are the four quadrants of the coordinate plane called?,,Mathematics,9,1,direct
+63,x-axis aur y-axis kya hote hain,,Mathematics,9,1,hinglish
+64,ek point ka x aur y value kaise likhte hain graph par,,Mathematics,9,1,vocab_free
+65,origin kise kehte hain graph mein,,Mathematics,9,1,hinglish
+66,polynomial kya hota hai?,,Mathematics,9,2,hinglish
+67,What is the degree of a polynomial?,,Mathematics,9,2,direct
+68,ek variable wale expression ko kya kehte hain jisme power hoti hai,,Mathematics,9,2,vocab_free
+69,zero of a polynomial ka matlab kya hai,,Mathematics,9,2,hinglish
+70,monomial aur binomial mein kya farak hai,,Mathematics,9,2,hinglish
+71,rational number kya hota hai?,,Mathematics,9,3,hinglish
+72,What is the difference between a rational and an irrational number?,,Mathematics,9,3,direct
+73,root 2 rational hai ya irrational,,Mathematics,9,3,hinglish
+74,number line par irrational number kaise dikhate hain,,Mathematics,9,3,vocab_free
+75,decimal expansion terminate kyun nahi hota kuch numbers mein,,Mathematics,9,3,vocab_free
+76,algebraic identity kya hoti hai?,,Mathematics,9,4,hinglish
+77,What is the expansion of (a+b) squared?,,Mathematics,9,4,direct
+78,do numbers ka square nikalne ka shortcut formula kya hai,,Mathematics,9,4,vocab_free
+79,(a-b)(a+b) ka expansion kya hota hai,,Mathematics,9,4,hinglish
+80,circle ka radius kya hota hai?,,Mathematics,9,5,hinglish
+81,What is a chord of a circle?,,Mathematics,9,5,direct
+82,circle ke andar ki sabse badi line ko kya kehte hain,,Mathematics,9,5,vocab_free
+83,circumference aur diameter mein kya relation hai,,Mathematics,9,5,hinglish
+84,perimeter kya hota hai kisi shape ka?,,Mathematics,9,6,hinglish
+85,How do you find the area of a triangle?,,Mathematics,9,6,direct
+86,ek rectangle ki chaaron taraf ki lambai ka sum kya kehlata hai,,Mathematics,9,6,vocab_free
+87,circle ka area kaise nikalte hain,,Mathematics,9,6,adjacent
+88,pi radius square se area kaise milta hai,,Mathematics,9,5,adjacent
+89,probability kya hoti hai?,,Mathematics,9,7,hinglish
+90,What is the probability of getting heads on a coin toss?,,Mathematics,9,7,direct
+91,dice fekne par 6 aane ka chance kitna hai,,Mathematics,9,7,hinglish
+92,kisi event ke hone ya na hone ke chances ko kaise measure karte hain,,Mathematics,9,7,vocab_free
+93,sequence kya hoti hai maths mein?,,Mathematics,9,8,hinglish
+94,What is the next number in an arithmetic sequence?,,Mathematics,9,8,direct
+95,numbers ke pattern mein agla number kaise predict karte hain,,Mathematics,9,8,vocab_free
+96,ek fixed number add karke jo series banti hai use kya kehte hain,,Mathematics,9,8,vocab_free
+97,hello guruji,,Mathematics,9,0,nonsearch
+98,thank you so much,,Mathematics,9,0,nonsearch
+99,samajh nahi aaya,"student: coordinate plane par point kaise plot karte hain?
+assistant: Yeh toh easy hai! Har point ke do coordinates hote hain, x aur y. x-axis pe kitna chalna hai, phir y-axis pe kitna. Ek point (3,2) ko kaise plot karoge?",Mathematics,9,1,followup
+100,aur ek example do,"student: rational number kya hota hai?
+assistant: Bilkul! Rational number woh hai jo p/q form mein likha ja sake, jahan q zero na ho. Jaise 1/2 ya 3. Ek aur fraction batao jo rational number ho?",Mathematics,9,3,followup
+101,coordinate plne par point kaise plot karte hain?,,Mathematics,9,1,typo
+102,algebraic identiy kya hoti hai,,Mathematics,9,4,typo
+103,matrix ka determinant kaise nikalte hain,,Mathematics,9,-1,out_of_corpus
+104,integral calculus kya hota hai,,Mathematics,9,-1,out_of_corpus
+105,trigonometry ke ratios kya hain — sin cos tan,,Mathematics,9,-1,out_of_corpus
+106,complex number ka matlab kya hota hai,,Mathematics,9,-1,out_of_corpus
+107,limits aur continuity kya hote hain,,Mathematics,9,-1,out_of_corpus
+108,vector ka dot product kaise nikalte hain,,Mathematics,9,-1,out_of_corpus
+
+# ---
+
+# v3 — Class 5 added (2026-08-21), ids 109-165.
+#
+# Class 5's chapters read as narrative story-hooks ("Coconut Farm", "Racing
+# Seconds"), not topic labels — a single-term grep against a title guess was
+# WRONG for three of fourteen chapters here (ch.6, ch.9, ch.13), each resolved
+# only by reading the actual opening chunk text, not by adding more search
+# terms. That is a different failure mode than Class 8's word-collision
+# mislabels: this was never "two chapters share a word", it was "the grep
+# never tested the right word because the title gave no hint what to search
+# for". Recorded so the next class gets the raw-text check FIRST for any
+# chapter whose title is a story rather than a subject, rather than spending
+# a query round discovering the same thing again.
+#
+# CLASS 5 CHAPTER MAP (manifests/mathematics/class05_manifest.csv), confirmed
+# from opening chunk_text, not titles:
+#    1  We the Travellers — I     distance/duration of a journey
+#    2  Fractions                 confirmed, 16 hits
+#    3  Angles as Turns           confirmed, 15 hits — full/half/quarter turns
+#    4  We the Travellers — II    distance/speed, continuation of ch.1
+#    5  Far and Near              units of measuring length (mm/cm/m/km)
+#    6  The Dairy Farm            algebraic puzzles: a SHAPE stands for a
+#                                  number, same shape = same number across
+#                                  several problems; also data sorting
+#    7  Shapes and Patterns       confirmed, 21 hits
+#    8  Weight and Capacity       confirmed, 27 hits
+#    9  Coconut Farm              multiplication/division fact families
+#                                  (35 ÷ 7 = 5 style, arrays)
+#   10  Symmetrical Design        confirmed, 10 hits
+#   11  Grandmother's Quilt       tessellation / fitting shapes to cover a
+#                                  border or area without gaps
+#   12  Racing Seconds            time and duration (reading a clock/stopwatch)
+#   13  Animal Jumps              multiplication as an inverse operation — a
+#                                  "function machine": numbers go in, get
+#                                  multiplied by an unknown factor, come out
+#   14  Maps And Locations        confirmed, 12 hits
+#
+# ch.6/ch.13 BOUNDARY: both frame multiplication as a hidden-number puzzle —
+# ch.6 several shapes each standing for one number, ch.13 a single unknown
+# multiplier applied to several numbers. Different mechanism, easy to conflate
+# from a question alone. One row below (id 145) is marked adjacent rather than
+# forced to one gold chapter, same treatment as Class 9's ch.5/ch.6 circles.
+109,is trip mein kitni door travel kiya?,,Mathematics,5,1,hinglish
+110,How do you find how long a journey took from a start and end time?,,Mathematics,5,1,direct
+111,ek jagah se doosri jagah jaane mein kitna time lagta hai kaise pata karte hain,,Mathematics,5,1,vocab_free
+112,1/4 aur 1/2 mein kaunsa bada hai?,,Mathematics,5,2,hinglish
+113,What is a fraction?,,Mathematics,5,2,direct
+114,ek roti ka aadha hissa kaise likhte hain,,Mathematics,5,2,vocab_free
+115,do fractions ko compare kaise karte hain,,Mathematics,5,2,hinglish
+116,ek pura chakkar lagane ko kya kehte hain?,,Mathematics,5,3,hinglish
+117,What is a quarter turn?,,Mathematics,5,3,direct
+118,ghadi ki suiyan ghoomte waqt kitna angle banati hain,,Mathematics,5,3,vocab_free
+119,adha chakkar aur pura chakkar mein kya farak hai,,Mathematics,5,3,hinglish
+120,speed kaise nikalte hain distance aur time se?,,Mathematics,5,4,hinglish
+121,"If a train covers 60 km in 2 hours, what is its speed?",,Mathematics,5,4,direct
+122,kaunsa vehicle zyada tez chal raha hai yeh kaise pata karte hain,,Mathematics,5,4,vocab_free
+123,lambai measure karne ke liye kaunsi units use karte hain?,,Mathematics,5,5,hinglish
+124,What is the standard unit for measuring length?,,Mathematics,5,5,direct
+125,meter aur centimeter mein kya relation hai,,Mathematics,5,5,vocab_free
+126,ek shape kisi number ko represent kare toh use kaise pata karte hain?,,Mathematics,5,6,hinglish
+127,"In a puzzle where the same shape always stands for the same number, how do you find its value?",,Mathematics,5,6,direct
+128,do alag shapes agar ek saath dikhein toh unki values kaise nikalte hain,,Mathematics,5,6,vocab_free
+129,pattern mein agla shape kya hoga?,,Mathematics,5,7,hinglish
+130,What comes next in a repeating pattern of shapes?,,Mathematics,5,7,direct
+131,ek design mein shapes kaise arrange kiye jaate hain,,Mathematics,5,7,vocab_free
+132,kilogram aur gram mein kya farak hai?,,Mathematics,5,8,hinglish
+133,How many millilitres are there in a litre?,,Mathematics,5,8,direct
+134,ek cheez ka weight kaise measure karte hain,,Mathematics,5,8,vocab_free
+135,multiplication aur division ek doosre se kaise jude hain?,,Mathematics,5,9,hinglish
+136,"If 5 times 7 is 35, what are the two division facts you can write from it?",,Mathematics,5,9,direct
+137,coconuts ko groups mein baantne se kaunsa fact banta hai,,Mathematics,5,9,vocab_free
+138,symmetry kya hoti hai?,,Mathematics,5,10,hinglish
+139,What is a line of symmetry?,,Mathematics,5,10,direct
+140,ek design ko fold karke check karte hain ki woh symmetrical hai ya nahi,,Mathematics,5,10,vocab_free
+141,quilt ke border ko dhakne ke liye shapes kaise fit karte hain?,,Mathematics,5,11,hinglish
+142,How do you cover a border completely using repeating shapes with no gaps?,,Mathematics,5,11,direct
+143,bina gap chhode shapes se ek area ko kaise bharte hain,,Mathematics,5,11,vocab_free
+144,stopwatch se time kaise measure karte hain?,,Mathematics,5,12,hinglish
+145,ek box mein number daalo toh multiply hoke bahar aata hai — yeh kaise kaam karta hai,,Mathematics,5,13,adjacent
+146,"What is the difference between hours, minutes, and seconds?",,Mathematics,5,12,direct
+147,do logon mein se kisne kam time liya yeh kaise pata karte hain,,Mathematics,5,12,vocab_free
+148,"ek number ko box mein daalne se woh multiply hoke nikalta hai, multiplier kaise pata karte hain?",,Mathematics,5,13,hinglish
+149,"If a number machine always multiplies the input by the same hidden number, how do you find that number?",,Mathematics,5,13,direct
+150,map par direction kaise batate hain?,,Mathematics,5,14,hinglish
+151,What symbol on a map usually shows north?,,Mathematics,5,14,direct
+152,ek jagah doosri jagah se kis direction mein hai yeh map se kaise pata karte hain,,Mathematics,5,14,vocab_free
+153,hi guruji kaise ho,,Mathematics,5,0,nonsearch
+154,ok thanks bye,,Mathematics,5,0,nonsearch
+155,samajh nahi aaya,"student: 1/4 aur 1/2 mein kaunsa bada hai?
+assistant: Yeh toh easy hai! Socho ek roti hai. Aadha roti (1/2) poore roti ka bada hissa hai, aur ek chauthai (1/4) usse chota hissa. Ek pizza ke 8 slices karo, toh 1/4 kitne slices hoga?",Mathematics,5,2,followup
+156,aur example do,"student: symmetry kya hoti hai?
+assistant: Bilkul! Symmetry matlab ek shape ko beech mein se fold karo aur dono taraf same dikhe. Jaise butterfly ke wings. Tumhare ghar mein aisi kaunsi cheez hai jo symmetrical hai?",Mathematics,5,10,followup
+157,1/4 aur 1/2 mein kaunsa baada hai?,,Mathematics,5,2,typo
+158,symettry kya hoti hai,,Mathematics,5,10,typo
+159,negative number kya hota hai,,Mathematics,5,-1,out_of_corpus
+160,percentage kaise nikalte hain,,Mathematics,5,-1,out_of_corpus
+161,decimal numbers ko multiply kaise karte hain,,Mathematics,5,-1,out_of_corpus
+162,algebra mein x ki value kaise nikalte hain,,Mathematics,5,-1,out_of_corpus
+163,square root kya hota hai,,Mathematics,5,-1,out_of_corpus
+164,circle ka area kaise nikalte hain,,Mathematics,5,-1,out_of_corpus
+165,prime number ki definition kya hai,,Mathematics,5,-1,out_of_corpus
