@@ -69,6 +69,12 @@ The resolution is ordering, not exclusion:
 
 Pass 2 exists because the product promises a Class 10 student can ask a Class 6 question without judgement. It is a fallback, not the default: own class first, wider only on a miss. The cost is one extra query, incurred only when the student was about to be refused anyway.
 
+### A known edge case in the resolution above
+
+Pass 2 fires whenever pass 1's best score is below `RAG_THRESHOLD` — that includes the *weak* band, not only an empty result — and the final choice (`curriculum/service.py`, `retrieve()`) is a bare `wider_top > own_top` comparison with no preference for the student's own grade. This means a pass-1 chunk that is topically correct but merely weak (say 0.35) can be overridden by a pass-2 chunk from a lower, simpler-worded grade that happens to score higher (say 0.55) — one level removed, but the same mechanism as the "simpler prose wins" failure two-pass retrieval exists to prevent.
+
+The one retrieval miss in the current eval run matches this pattern: `'temperature kaise naapte hain'` asked as Class 7 (gold ch.7) was served Class 6 ch.7 at 0.552, because pass 1 never scored high enough to short-circuit pass 2 (see `docs/EVALUATION.md` §6). The `cross_class` eval slice is n=33, so one miss is 3% — too small a sample to call this settled either way. [Guess — plausible mechanism, not confirmed against a larger sample] Before trusting the 97% `cross_class` figure for anything beyond "did not obviously regress," grow that slice past 33 rows (`docs/EVALUATION.md` §7 has the process).
+
 ### Superseded approaches, and why they failed
 
 | Removed | Why |
