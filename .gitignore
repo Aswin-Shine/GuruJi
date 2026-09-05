@@ -30,6 +30,10 @@ pgdata/
 .DS_Store
 Thumbs.db
 
+# ---- local tools ------------------------------------------------------------
+graphify-out/
+CLAUDE.md
+
 # ---- terraform --------------------------------------------------------------
 .terraform/
 .terraform.lock.hcl
