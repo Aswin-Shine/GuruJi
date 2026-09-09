@@ -1,6 +1,6 @@
 import type { JSX } from "preact";
 import { useContext, useEffect, useRef, useState } from "preact/hooks";
-import { api } from "../api";
+import { api, LocalLimitError } from "../api";
 import { ACCEPTED_IMAGE_TYPES, downscale } from "../photo";
 import { MAX_MESSAGE_CHARS, stateFor, type Grounding, type ReplyState } from "../backend";
 import type { CurriculumSubject } from "../backend";
@@ -268,6 +268,15 @@ export function Chat(): JSX.Element {
      hold is a wasted round trip AND the thing that drops the picture, so the
      loader skips exactly once. */
   const skipNextLoad = useRef<string | null>(null);
+  /** The in-flight send()/sendPhoto() call, if any — lets the Stop button end
+   *  the wait. It does not reach the server (see api.ts); GuruJi may still
+   *  finish and bill the turn, the student just stops watching it happen. */
+  const abortRef = useRef<AbortController | null>(null);
+  const toastTimer = useRef<number | null>(null);
+
+  function stop(): void {
+    abortRef.current?.abort();
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -285,6 +294,21 @@ export function Chat(): JSX.Element {
       try {
         const msgs = await api.messages(targetId);
         if (cancelled) return;
+        // The class/subject pill must show what this conversation is actually
+        // pinned to, not whatever chatGrade happened to default to — those can
+        // disagree if the student's profile grade changed since, or on a
+        // sibling-shared phone. No dedicated single-conversation endpoint
+        // exists, so this reuses the same list call the sidebar already
+        // makes rather than adding a new one for one field.
+        try {
+          const conv = (await api.conversations(30)).find((c) => c.id === targetId);
+          if (conv && !cancelled) {
+            setChatGrade(conv.grade ?? s?.grade);
+            setChatSubject(conv.subject ?? undefined);
+          }
+        } catch {
+          // Non-fatal: the persistent pill just won't show for this chat.
+        }
         // Re-attach previews this tab still holds, by position. The server sends
         // the transcript text only — the image was discarded during the request —
         // so without this, the navigate() that follows the first message of a new
@@ -477,8 +501,28 @@ export function Chat(): JSX.Element {
 
 
   function say(msg: string): void {
+    // A second say() within 2.6s of the first used to inherit whichever timer
+    // fired first, clipping the newer toast's display window short.
+    if (toastTimer.current) window.clearTimeout(toastTimer.current);
     setToast(msg);
-    window.setTimeout(() => setToast(null), 2600);
+    toastTimer.current = window.setTimeout(() => setToast(null), 2600);
+  }
+
+  /** Fires once per device, the first time a reply doesn't earn the green
+   *  citation chip. The rail itself is DESIGN.md's whole "learn the contrast
+   *  from the dashes alone" bet — this is just a single nudge the first time,
+   *  not a replacement for it, so it reuses the same short toast every other
+   *  one-off confirmation in this screen already uses. */
+  function maybeExplainRail(state: ReplyState, grounding: Grounding | null | undefined): void {
+    const willShowRail = state !== "answer" || grounding === "weak" || grounding === "empty";
+    if (!willShowRail) return;
+    try {
+      if (localStorage.getItem("guruji.railHintSeen")) return;
+      localStorage.setItem("guruji.railHintSeen", "1");
+    } catch {
+      return; // Private mode etc. — skip rather than nag every single turn.
+    }
+    say("Dashed = related but not from this chapter. Solid green = straight from your textbook.");
   }
 
   async function send(raw?: string): Promise<void> {
@@ -498,6 +542,9 @@ export function Chat(): JSX.Element {
     // a new conversation and fill the student's history with empty rows.
     const newSession = takeNewSessionFlag();
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
       const r = await api.send(body, {
         ...(newSession ? { newSession: true } : {}),
@@ -506,6 +553,7 @@ export function Chat(): JSX.Element {
         // conversation the server ignores it anyway.
         ...(!targetId && chatGrade ? { grade: chatGrade } : {}),
         ...(!targetId && chatSubject ? { subject: chatSubject } : {}),
+        signal: controller.signal,
       });
       setTurns((t) => [
         ...t,
@@ -519,6 +567,7 @@ export function Chat(): JSX.Element {
           excerpt: r.source_excerpt,
         },
       ]);
+      maybeExplainRail(stateFor(r.reply, r.grounding), r.grounding);
       refreshConversations();
       // Bind to the conversation the server actually used, so the next message
       // continues it rather than re-triggering the 4-hour rule.
@@ -527,8 +576,19 @@ export function Chat(): JSX.Element {
         navigate(`/chat/${r.conversation_id}`, true);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Message didn't send.");
+      // A Stop tap, not a failure — "Message didn't send" would be a lie here,
+      // the question really did go out.
+      if (err instanceof DOMException && err.name === "AbortError") {
+        say("Rok diya. Jab chaho phir se pooch sakte ho.");
+      } else if (err instanceof LocalLimitError) {
+        // Thrown client-side, before the request leaves the browser (api.ts) —
+        // its own message is "local rate limit", never meant for a screen.
+        setError(`Bahut jaldi bhej rahe ho — ${err.waitSec}s ruko aur phir try karo.`);
+      } else {
+        setError(err instanceof Error ? err.message : "Message didn't send.");
+      }
     } finally {
+      abortRef.current = null;
       setBusy(false);
       inputRef.current?.focus();
     }
@@ -601,11 +661,14 @@ export function Chat(): JSX.Element {
     ]);
 
     const newSession = takeNewSessionFlag();
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       const image = await downscale(file);
       const r = await api.sendPhoto(image, {
         ...(newSession ? { newSession: true } : {}),
         ...(targetId ? { conversationId: targetId } : {}),
+        signal: controller.signal,
       });
       // Recorded BEFORE setTurns, so the history reload that `navigate` triggers
       // below already finds it. Registering afterwards loses that race and the
@@ -646,8 +709,15 @@ export function Chat(): JSX.Element {
       // error reads as though it was sent and then failed downstream.
       setTurns((t) => t.filter((turn) => turn.id !== placeholderId));
       releaseObjectUrl(previewUrl);
-      setError(err instanceof Error ? err.message : "That photo didn't send.");
+      if (err instanceof DOMException && err.name === "AbortError") {
+        say("Rok diya. Jab chaho phir se bhej sakte ho.");
+      } else if (err instanceof LocalLimitError) {
+        setError(`Bahut jaldi bhej rahe ho — ${err.waitSec}s ruko aur phir try karo.`);
+      } else {
+        setError(err instanceof Error ? err.message : "That photo didn't send.");
+      }
     } finally {
+      abortRef.current = null;
       setBusy(false);
     }
   }
@@ -679,35 +749,44 @@ export function Chat(): JSX.Element {
           <div class="classmenu">
             {classOpen ? (
               <div class="tools-menu" role="menu" aria-label="Class for this chat">
-                {[5, 6, 7, 8, 9, 10].map((g) => {
-                  const subs = (catalog ?? []).filter((c) => c.grade === g);
-                  return (
-                    <button
-                      class="tools-item"
-                      key={g}
-                      role="menuitem"
-                      aria-current={chatGrade === g}
-                      onClick={() => {
-                        pickGrade(g);
-                        if (subs.length <= 1) setClassOpen(false);
-                      }}
-                    >
-                      <span>Class {g}</span>
-                      {/* The subject label comes from the corpus, not a hardcoded
-                          `g === 5 ? "EVS"`. A single subject is still named here,
-                          because picking the class is the only click needed to
-                          land on it. Two or more show nothing — that list is one
-                          click away in the SUBJECT section below once this class
-                          is selected, so repeating a count here is a badge that
-                          says nothing a click wouldn't show immediately after. */}
-                      {subs.length === 0 ? (
-                        <em data-tone="none">soon</em>
-                      ) : subs.length === 1 ? (
-                        <em>{subs[0]!.subject}</em>
-                      ) : null}
-                    </button>
-                  );
-                })}
+                {/* Split 5-7 / 8-10 rather than six items in one flat run — the
+                    second group reuses .menu-sub's hairline break, the same
+                    device already used below to separate Subject. */}
+                {[[5, 6, 7], [8, 9, 10]].map((row, i) => (
+                  <div class={i === 1 ? "menu-sub" : undefined} key={row[0]}>
+                    {row.map((g) => {
+                      const subs = (catalog ?? []).filter((c) => c.grade === g);
+                      return (
+                        <button
+                          class="tools-item"
+                          key={g}
+                          role="menuitem"
+                          aria-current={chatGrade === g}
+                          onClick={() => {
+                            pickGrade(g);
+                            if (subs.length <= 1) setClassOpen(false);
+                          }}
+                        >
+                          <span>Class {g}</span>
+                          {/* The subject label comes from the corpus, not a
+                              hardcoded `g === 5 ? "EVS"`. A single subject is
+                              still named here, because picking the class is
+                              the only click needed to land on it. Two or more
+                              show nothing — that list is one click away in the
+                              SUBJECT section below once this class is
+                              selected, so repeating a count here is a badge
+                              that says nothing a click wouldn't show
+                              immediately after. */}
+                          {subs.length === 0 ? (
+                            <em data-tone="none">soon</em>
+                          ) : subs.length === 1 ? (
+                            <em>{subs[0]!.subject}</em>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ))}
 
                 {/* Subject row appears only when the chosen class genuinely has
                     more than one. A menu with a single option is noise pretending
@@ -763,6 +842,17 @@ export function Chat(): JSX.Element {
               </svg>
             </button>
           </div>
+        ) : chatGrade ? (
+          // Read-only once the conversation has messages — the class is
+          // stamped server-side by then, so an editable control here would
+          // offer something the backend correctly refuses. Still visible,
+          // though: a student switching between siblings' profiles needs to
+          // see which class scope produced an answer without starting a new
+          // chat to check.
+          <span class="classpill" data-static="true" title="This chat's class">
+            Class {chatGrade}
+            {subjectsHere.length > 1 ? ` · ${chatSubject ?? "All"}` : ""}
+          </span>
         ) : null}
         <div class="only-mobile">
           <ThemeToggle />
@@ -851,16 +941,41 @@ export function Chat(): JSX.Element {
                 <span class="rail" data-state="hold">
                   Related — not from your chapter
                 </span>
+              ) : t.grounding === "empty" ? (
+                // A genuine retrieval miss — distinct from "not_needed" (a
+                // chit-chat reply that was never supposed to cite a chapter,
+                // and must stay a plain unmarked bubble). Without this, the
+                // one case DESIGN.md calls the dashed rail's whole reason to
+                // exist — "GuruJi never quietly substitutes a guess for an
+                // answer" — was the one case rendering with no rail at all.
+                <span class="rail" data-state="hold">
+                  Not from your textbook
+                </span>
               ) : null}
             </div>
           ))}
 
           {busy ? (
             <div class="turn" data-from="guruji">
-              <div class="think" role="status" aria-label="GuruJi is thinking">
-                <i />
-                <i />
-                <i />
+              <div style="display:flex;align-items:center;gap:0.5rem">
+                <div class="think" role="status" aria-label="GuruJi is thinking">
+                  <i />
+                  <i />
+                  <i />
+                </div>
+                <button class="icon-btn" onClick={stop} aria-label="Stop" title="Stop">
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.2"
+                    aria-hidden="true"
+                  >
+                    <rect x="5" y="5" width="14" height="14" rx="2" />
+                  </svg>
+                </button>
               </div>
             </div>
           ) : null}

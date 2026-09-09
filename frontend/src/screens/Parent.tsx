@@ -207,24 +207,32 @@ export function Parent(): JSX.Element {
                 appear here for you to read.
               </p>
             ) : (
-              <div class="flags">
-                {flags.map((f) => (
-                  <article class="flag" key={f.id}>
-                    <header>
-                      <span data-dir={f.direction}>
-                        {f.direction === "inbound" ? "Your child asked" : "GuruJi almost replied"}
-                      </span>
-                      <time datetime={f.flagged_at}>
-                        {new Date(f.flagged_at).toLocaleDateString(undefined, {
-                          day: "numeric",
-                          month: "short",
-                        })}
-                      </time>
-                    </header>
-                    <p>{f.content}</p>
-                  </article>
-                ))}
-              </div>
+              <>
+                <p class="note">
+                  GuruJi checks every question and every reply before it goes anywhere. When one
+                  crosses the line, it never reaches your child — you're reading it here instead.
+                  Most of these are false alarms, not signs of trouble. If one doesn't look right,
+                  that's worth a conversation with your child.
+                </p>
+                <div class="flags">
+                  {flags.map((f) => (
+                    <article class="flag" key={f.id}>
+                      <header>
+                        <span data-dir={f.direction}>
+                          {f.direction === "inbound" ? "Your child asked" : "GuruJi almost replied"}
+                        </span>
+                        <time datetime={f.flagged_at}>
+                          {new Date(f.flagged_at).toLocaleDateString(undefined, {
+                            day: "numeric",
+                            month: "short",
+                          })}
+                        </time>
+                      </header>
+                      <p>{f.content}</p>
+                    </article>
+                  ))}
+                </div>
+              </>
             )}
           </section>
 

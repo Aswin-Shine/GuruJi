@@ -80,10 +80,16 @@ interface Options {
   body?: unknown;
   auth?: boolean;
   slow?: boolean;
+  /** Lets a caller stop WAITING on a slow call (e.g. a "Stop" button on the
+   *  tutoring turn). This does not reach the server — the backend pipeline is
+   *  synchronous with no cancellation token, so an in-flight paid LLM call
+   *  keeps running and may still be persisted. Abandoning the fetch here only
+   *  frees the UI; it never claims to stop billing or generation server-side. */
+  signal?: AbortSignal;
 }
 
 async function request<T>(path: string, opts: Options = {}): Promise<T> {
-  const { method = "GET", body, auth = true, slow = false } = opts;
+  const { method = "GET", body, auth = true, slow = false, signal } = opts;
 
   // FormData carries its own multipart Content-Type WITH a generated boundary.
   // Setting the header manually omits the boundary and the server cannot parse
@@ -96,6 +102,18 @@ async function request<T>(path: string, opts: Options = {}): Promise<T> {
     if (!token) throw new ApiError(401, "Not signed in");
     headers["Authorization"] = `Bearer ${token}`;
   }
+
+  // One controller owns the actual fetch signal, driven by whichever fires
+  // first: our own timeout, or the caller's signal (Stop button). Not
+  // AbortSignal.any() — that's Safari 17.4+ only, and this app's browserslist
+  // targets Safari 16.4.
+  const controller = new AbortController();
+  const timeoutId = setTimeout(
+    () => controller.abort(new DOMException("Timed out", "TimeoutError")),
+    slow ? TIMEOUT_SLOW_MS : TIMEOUT_MS,
+  );
+  const relayAbort = (): void => controller.abort(signal?.reason);
+  signal?.addEventListener("abort", relayAbort);
 
   let res: Response;
   try {
@@ -113,13 +131,19 @@ async function request<T>(path: string, opts: Options = {}): Promise<T> {
       credentials: "same-origin",
       cache: "no-store",
       redirect: "error", // a redirect on an API path is a misconfiguration, not a flow
-      signal: AbortSignal.timeout(slow ? TIMEOUT_SLOW_MS : TIMEOUT_MS),
+      signal: controller.signal,
     });
   } catch (e) {
     if (e instanceof DOMException && e.name === "TimeoutError") {
       throw new ApiError(0, "GuruJi took too long to answer. Try again.");
     }
+    // Caller-initiated stop, not a failure — rethrow as-is so the caller can
+    // tell "I cancelled this" apart from "this broke".
+    if (e instanceof DOMException && e.name === "AbortError") throw e;
     throw new ApiError(0, "No connection. Check your internet and try again.");
+  } finally {
+    clearTimeout(timeoutId);
+    signal?.removeEventListener("abort", relayAbort);
   }
 
   // 401 on an AUTHENTICATED call means the token is expired, revoked or forged.
@@ -262,6 +286,7 @@ export const api = {
       conversationId?: string;
       grade?: number;
       subject?: string;
+      signal?: AbortSignal;
     } = {},
   ) => {
     localLimitCheck();
@@ -278,6 +303,7 @@ export const api = {
         ...(opts.subject ? { subject: opts.subject } : {}),
       },
       slow: true,
+      ...(opts.signal ? { signal: opts.signal } : {}),
     });
   },
 
@@ -294,7 +320,7 @@ export const api = {
    *  moderation, retrieval and tutoring calls. */
   sendPhoto: (
     image: Blob,
-    opts: { newSession?: boolean; conversationId?: string } = {},
+    opts: { newSession?: boolean; conversationId?: string; signal?: AbortSignal } = {},
   ) => {
     localLimitCheck();
     const form = new FormData();
@@ -305,6 +331,7 @@ export const api = {
       method: "POST",
       body: form,
       slow: true,
+      ...(opts.signal ? { signal: opts.signal } : {}),
     });
   },
 

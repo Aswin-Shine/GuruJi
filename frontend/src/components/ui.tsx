@@ -1,5 +1,4 @@
 import type { ComponentChildren, JSX } from "preact";
-import { navigate, type Path } from "../router";
 
 /** The GuruJi mark. Devanagari, so the product is recognisable to a Class 5
  *  student before any English is read. aria-hidden because the accessible name
@@ -29,14 +28,6 @@ export function Banner({
     >
       {children}
     </div>
-  );
-}
-
-export function BackLink({ to, label }: { to: Path; label: string }): JSX.Element {
-  return (
-    <button class="btn" style="min-height:2.25rem;padding:0 .75rem" onClick={() => navigate(to)}>
-      ‹ <span>{label}</span>
-    </button>
   );
 }
 

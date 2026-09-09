@@ -100,17 +100,23 @@ export function Onboarding(): JSX.Element {
         GuruJi teaches only from your class's NCERT books — that's why this one matters.
       </p>
 
-      <div class="grades" role="group" aria-label="Choose your class">
-        {GRADES.map((g) => (
-          <button
-            key={g}
-            type="button"
-            aria-pressed={grade === g}
-            onClick={() => setGrade(g)}
-          >
-            <b>{g}</b>
-            <small>Class</small>
-          </button>
+      {/* Split 5-7 / 8-10 rather than one flat run of six — a decision point
+          this size reads faster as two small choices than one big one. */}
+      <div class="stack" role="group" aria-label="Choose your class">
+        {[GRADES.slice(0, 3), GRADES.slice(3)].map((row) => (
+          <div class="grades" key={row[0]}>
+            {row.map((g) => (
+              <button
+                key={g}
+                type="button"
+                aria-pressed={grade === g}
+                onClick={() => setGrade(g)}
+              >
+                <b>{g}</b>
+                <small>Class</small>
+              </button>
+            ))}
+          </div>
         ))}
       </div>
 

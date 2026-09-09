@@ -15,6 +15,10 @@ export function Auth(): JSX.Element {
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Not being on the pilot allow-list is a limit, not a fault — DESIGN.md's Warm
+  // Limit Rule says a hold state should never read as an error. Everything else
+  // that lands in `error` is a genuine failure and keeps the rose/fault tone.
+  const [errorTone, setErrorTone] = useState<"hold" | "fault">("fault");
   const [notice, setNotice] = useState<string | null>(null);
   const codeRef = useRef<HTMLInputElement>(null);
 
@@ -24,6 +28,7 @@ export function Auth(): JSX.Element {
   async function askForCode(): Promise<void> {
     setBusy(true);
     setError(null);
+    setErrorTone("fault");
     setNotice(null);
     try {
       const r = await api.requestOtp(e164);
@@ -35,7 +40,9 @@ export function Auth(): JSX.Element {
       queueMicrotask(() => codeRef.current?.focus());
     } catch (err) {
       if (err instanceof ApiError && err.status === 501) {
-        // Do not dress this up. Codes genuinely cannot be sent yet.
+        // Do not dress this up. Codes genuinely cannot be sent yet — but not
+        // being invited is a limit, not a fault.
+        setErrorTone("hold");
         setError(
           "Codes aren't being sent yet — GuruJi is in a closed pilot. Message us on WhatsApp to get added.",
         );
@@ -50,6 +57,7 @@ export function Auth(): JSX.Element {
   async function verify(): Promise<void> {
     setBusy(true);
     setError(null);
+    setErrorTone("fault");
     try {
       const t = await api.verifyOtp(e164, code, who);
       session.start(t);
@@ -131,9 +139,7 @@ export function Auth(): JSX.Element {
         </div>
 
         {notice ? <Banner>{notice}</Banner> : null}
-        {error ? (
-          <Banner tone="fault">{error}</Banner>
-        ) : null}
+        {error ? <Banner tone={errorTone}>{error}</Banner> : null}
 
         <div class="grow" />
         <button
@@ -191,7 +197,7 @@ export function Auth(): JSX.Element {
         </div>
       </fieldset>
 
-      {error ? <Banner tone="fault">{error}</Banner> : null}
+      {error ? <Banner tone={errorTone}>{error}</Banner> : null}
 
       <div class="grow" />
       <button

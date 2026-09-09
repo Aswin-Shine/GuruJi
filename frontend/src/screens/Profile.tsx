@@ -190,11 +190,17 @@ export function Profile(): JSX.Element {
 
           <section class="panel">
             <span class="eyebrow">Which class are you in?</span>
-            <div class="seg" role="group" aria-label="Your class">
-              {CLASSES.map((c) => (
-                <button key={c} aria-pressed={grade === c} onClick={() => setGrade(c)}>
-                  {c}
-                </button>
+            {/* Split 5-7 / 8-10 rather than six segments in one row — a
+                decision this size reads faster as two small choices. */}
+            <div class="stack" role="group" aria-label="Your class">
+              {[CLASSES.slice(0, 3), CLASSES.slice(3)].map((row) => (
+                <div class="seg" key={row[0]}>
+                  {row.map((c) => (
+                    <button key={c} aria-pressed={grade === c} onClick={() => setGrade(c)}>
+                      {c}
+                    </button>
+                  ))}
+                </div>
               ))}
             </div>
             <p class="note">

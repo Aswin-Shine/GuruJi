@@ -1,10 +1,11 @@
 import type { ComponentChildren, JSX } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { api } from "../api";
 import type { ConversationOut } from "../backend";
 import { navigate, useRoute } from "../router";
 import { session } from "../session";
 import { theme } from "../theme";
+import { Banner } from "./ui";
 
 /**
  * The app shell: a sidebar rail and a main pane.
@@ -130,6 +131,10 @@ export function Sidebar({
 }): JSX.Element {
   const [items, setItems] = useState<ConversationOut[] | null>(null);
   const [query, setQuery] = useState("");
+  // One slot, not a list: only the most recent delete can be undone, matching
+  // "one thing at a time" everywhere else in this app.
+  const [pendingRemoval, setPendingRemoval] = useState<{ id: string; item: ConversationOut } | null>(null);
+  const removeTimer = useRef<number | null>(null);
   const route = useRoute();
   const s = session.get();
 
@@ -150,16 +155,29 @@ export function Sidebar({
     return () => window.removeEventListener("guruji:conversations", onRefresh);
   }, []);
 
-  async function remove(id: string, ev: Event): Promise<void> {
+  function remove(id: string, ev: Event): void {
     ev.stopPropagation();
-    // Optimistic: the row disappears immediately and the request follows. A
-    // failed hide restores it on the next load rather than blocking the tap.
+    const item = items?.find((c) => c.id === id);
+    if (!item) return;
+    // A fast-tapping child deletes a real chapter's worth of conversation by
+    // mistake as easily as an intended one — a 5s undo window costs nothing
+    // and the hide-request only fires once that window actually elapses.
+    if (removeTimer.current) window.clearTimeout(removeTimer.current);
     setItems((cur) => cur?.filter((c) => c.id !== id) ?? cur);
-    try {
-      await api.hideConversation(id);
-    } finally {
-      void load();
-    }
+    setPendingRemoval({ id, item });
+    removeTimer.current = window.setTimeout(() => {
+      setPendingRemoval(null);
+      void api.hideConversation(id).finally(() => void load());
+    }, 5000);
+  }
+
+  function undoRemove(): void {
+    if (removeTimer.current) window.clearTimeout(removeTimer.current);
+    removeTimer.current = null;
+    setPendingRemoval((p) => {
+      if (p) setItems((cur) => (cur ? [p.item, ...cur] : cur));
+      return null;
+    });
   }
 
   /* Client-side filter. The titles are already in memory and there are at most
@@ -284,6 +302,17 @@ export function Sidebar({
           ))
         )}
       </div>
+
+      {pendingRemoval ? (
+        <div style="padding:0 .5rem">
+          <Banner>
+            <span style="flex:1">Chat deleted.</span>
+            <button class="linkish" onClick={undoRemove}>
+              Undo
+            </button>
+          </Banner>
+        </div>
+      ) : null}
 
       {/* Bottom zone. Settings and identity belong at the far end of the rail,
           away from the primary actions — the flex spacer on .side-list is what
