@@ -182,7 +182,15 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    full_text = "\n".join((page.extract_text() or "") for page in PdfReader(args.pdf_path).pages)
+    # "layout" mode preserves each text run's visual x/y position instead of pypdf's
+    # default content-stream order. Found live in production: the default mode can
+    # flatten a stacked fraction/worked-example block (numerator, bar, denominator,
+    # units) into one scrambled line — e.g. "Pressure = = 50 N/m2= Force / Area100 N
+    # / 2 m2" instead of a readable equation. Layout mode reads left-to-right,
+    # top-to-bottom by position, which keeps that kind of block in source order.
+    full_text = "\n".join(
+        (page.extract_text(extraction_mode="layout") or "") for page in PdfReader(args.pdf_path).pages
+    )
     full_text = clean_pdf_noise(full_text)
     if not full_text.strip():
         sys.exit("No extractable text in PDF (scanned image? needs OCR — out of Phase 1 scope).")

@@ -261,3 +261,30 @@ def test_grounded_answer_still_ships_its_citation(db):
     assert result.source_excerpt
     # The ingester's contextual header must not leak into the quoted passage.
     assert not result.source_excerpt.startswith("Class 8 Science")
+
+
+def test_garbled_excerpt_suppressed_but_citation_kept(db):
+    """A real pypdf artifact: a fraction/worked-example flattened onto one
+    line ("Pressure = = 50 N/m2= Force / Area100 N / 2 m2"). The chapter really
+    is grounded — only the unreadable quote must be hidden, per the client's
+    existing "passage isn't available" fallback."""
+    _, student, _ = make_student(db)
+    garbled = orchestrator.curriculum.Chunk(
+        1,
+        "Class 8 Science — Chapter 6: Pressure\n\n"
+        "Pressure = = 50 N/m2= Force / Area100 N / 2 m2",
+        0.82,
+        grade=8, subject="Science", chapter_no=6, title="Pressure",
+    )
+
+    with _searching("pressure kya hota hai"), \
+         patch.object(orchestrator.llm, "moderate", return_value=False), \
+         patch.object(orchestrator.llm, "check_spend_cap"), \
+         patch.object(orchestrator.llm, "embed", return_value=[0.0] * 1536), \
+         patch.object(orchestrator.curriculum, "retrieve", return_value=[garbled]), \
+         patch.object(orchestrator.llm, "chat", return_value=("Pressure = Force / Area.", 10, 5)):
+        result = orchestrator.orchestrate(db, student.id, 8, "NCERT", "pressure kya hota hai", "")
+
+    assert result.grounding == "grounded"
+    assert result.citation and "Chapter 6" in result.citation
+    assert result.source_excerpt is None

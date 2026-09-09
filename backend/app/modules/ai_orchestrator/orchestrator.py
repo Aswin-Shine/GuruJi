@@ -179,6 +179,24 @@ def plan_query(
         return fallback
 
 
+def _looks_garbled(text: str) -> bool:
+    """Catches the specific pypdf extraction artifact seen live in production:
+    a fraction/worked-example block (numerator, denominator, units) flattened
+    onto one line in the wrong order, e.g. "Pressure = = 50 N/m2= Force /
+    Area100 N / 2 m2" instead of a readable equation. Ordinary NCERT prose
+    essentially never carries this many bare "=" signs in one short passage —
+    a real sentence states a formula once, not three times back to back.
+
+    Repairing the text would mean guessing the PDF's original 2D layout from
+    already-scrambled linear output — too unreliable for a product whose whole
+    claim is "check this against the exact passage." Suppressing it and
+    falling back to no excerpt (the client already has this path — see
+    Chat.tsx's "passage isn't available" toast) is the honest response; a
+    wrong "corrected" quote would be worse than none.
+    """
+    return text.count("=") >= 3 or "= =" in text
+
+
 def _grounding(chunks: list) -> str:
     """Classify retrieval strength as grounded / weak / empty.
 
@@ -266,7 +284,22 @@ def orchestrate(
         # a machine artifact rather than a line from their book.
         if cite_ok and best is not None:
             body = best.chunk_text.split("\n\n", 1)[-1].strip()
-            excerpt = body[:420].rstrip() + ("…" if len(body) > 420 else "")
+            # Citation stays — the answer really is grounded in this chapter.
+            # Only the quoted passage is suppressed, since a garbled quote
+            # breaks the one promise it exists to keep: that a student can
+            # check it against their own book.
+            if _looks_garbled(body):
+                excerpt = None
+            else:
+                head = body[:420].rstrip()
+                # A chunk boundary can land mid-word ("mmon types of fuels…") —
+                # a lowercase first letter is the tell, since a real sentence
+                # or heading never starts on one. The trailing ellipsis already
+                # says "more follows"; nothing said "this already started
+                # partway through a word" — a leading one makes that visible
+                # instead of reading as broken.
+                leading = "…" if body[:1].islower() else ""
+                excerpt = leading + head + ("…" if len(body) > 420 else "")
         else:
             excerpt = None
 
