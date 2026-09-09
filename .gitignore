@@ -33,6 +33,10 @@ Thumbs.db
 # ---- local tools ------------------------------------------------------------
 graphify-out/
 CLAUDE.md
+.claude/
+.impeccable/
+DESIGN.md
+PRODUCT.md
 
 # ---- terraform --------------------------------------------------------------
 .terraform/
