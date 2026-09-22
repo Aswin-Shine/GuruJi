@@ -19,7 +19,7 @@ This document assumes nothing beyond a working Docker installation. Every comman
 | 4 | [Verify the stack is healthy](#4-verify-the-stack-is-healthy) |
 | 5 | [Ingest a corpus](#5-ingest-a-corpus) |
 | 6 | [Walk through the product by hand](#6-walk-through-the-product-by-hand) |
-| 7 | [Simulate a WhatsApp message](#7-simulate-a-whatsapp-message) |
+| 7 | [Connect a real WhatsApp number](#7-connect-a-real-whatsapp-number) |
 | 8 | [Run the test suite](#8-run-the-test-suite) |
 | 9 | [Run the evaluation harness](#9-run-the-evaluation-harness) |
 | 10 | [Fast frontend iteration](#10-fast-frontend-iteration) |
@@ -275,9 +275,13 @@ Five wrong PINs delete the link row entirely, which invalidates the PIN (it is H
 
 ---
 
-## 7. Simulate a WhatsApp message
+## 7. Connect a real WhatsApp number
 
-No Meta account is needed. `scripts/send_test_webhook.py` builds a correctly shaped payload and signs it with your `WHATSAPP_APP_SECRET`.
+The webhook does two things: it **acks** Meta immediately (`{"status": "accepted"}`), then runs the tutoring turn in the background and **sends** the reply through Meta's Cloud API. Without a token the second half degrades to a log line, so §7a works with no Meta account at all; §7b–7d are what it takes to put a reply on a real phone.
+
+### 7a. Simulate a message locally (no Meta account)
+
+`scripts/send_test_webhook.py` builds a correctly shaped payload and signs it with your `WHATSAPP_APP_SECRET`.
 
 ```bash
 cd backend
@@ -288,23 +292,76 @@ python3 scripts/send_test_webhook.py "+919999900001" "8"                     # o
 python3 scripts/send_test_webhook.py "+919999900001" "pressure kya hota hai?"  # a tutoring turn
 ```
 
-**Expect:** HTTP 200 and a JSON body containing the reply.
+**Expect:** HTTP 200 and `{"status": "accepted", "accepted": 1}` — the body is an ack, not the answer. The reply itself is in the api log:
 
-Re-run the same command with `WAMID` pinned to a fixed value to exercise the idempotency path:
+```bash
+docker compose logs api | grep outbound_reply
+# ... outbound_reply (log-only, WhatsApp outbound not configured) to=+919999900001 reply='...'
+```
+
+Re-run with `WAMID` pinned to exercise idempotency:
 
 ```bash
 WAMID=wamid.fixed.001 python3 scripts/send_test_webhook.py "+919999900001" "test"
 WAMID=wamid.fixed.001 python3 scripts/send_test_webhook.py "+919999900001" "test"
-# second call -> {"status": "duplicate", "reply": null}, and no second LLM charge
+# second call -> {"status": "duplicate", "accepted": 0}, and no second LLM charge
 ```
 
-> **Note:** the reply appears in the HTTP response body and in the logs. It is **not** sent to the phone. Outbound WhatsApp delivery is not implemented — see the README's Known limitations.
+> With `WHATSAPP_ACCESS_TOKEN` set, this script sends a **real** WhatsApp message to whatever number you pass. Use one of the test number's verified recipients (§7b step 3), and only after that phone has messaged the business number first.
+
+### 7b. Meta-side setup, from nothing
+
+Items marked *[verify]* are Meta UI details that move; confirm them in the dashboard rather than trusting this page.
+
+1. **Developer account and business portfolio.** Sign up at developers.facebook.com; in Meta Business Suite create a Business portfolio (a personal Facebook account is required to hold both).
+2. **App.** My Apps → Create App → type **Business** → attach the portfolio → Add product → **WhatsApp**.
+3. **Test number.** WhatsApp → API Setup. Meta provides a free **test phone number**. Note two IDs on this page: the **Phone number ID** (→ `WHATSAPP_PHONE_NUMBER_ID`) and the WABA ID. Add recipient numbers under "To" — each one confirms via an OTP on that phone. Up to 5 recipients *[verify]*. Traffic to and from the test number is free *[verify]*.
+4. **Access token — the permanent one.** The token shown on API Setup expires in 24 hours; do not deploy it. Instead: Business Settings → Users → **System Users** → Add (role Admin) → **Assign Assets**: the app (full control) and the WhatsApp account → **Generate Token**: select the app, expiry **Never**, permissions `whatsapp_business_messaging` and `whatsapp_business_management`. That string is `WHATSAPP_ACCESS_TOKEN`. It sends messages as the business — handle it like `SECRET_KEY`.
+5. **Graph API version.** The curl sample on API Setup shows a URL like `https://graph.facebook.com/vNN.0/...`. Copy that `vNN.0` exactly into `WHATSAPP_GRAPH_API_VERSION`. There is deliberately no default in the code: a guessed version is how sends silently start failing on a Meta deprecation date.
+6. **App secret.** App Settings → Basic → **App Secret** → `WHATSAPP_APP_SECRET`. This is what signs `X-Hub-Signature-256`; the webhook rejects anything not signed with it.
+7. **Webhook.** WhatsApp → Configuration → Webhook → Edit. Callback URL `https://<GURUJI_HOSTNAME>/api/v1/webhooks/whatsapp`, Verify token = your `WHATSAPP_VERIFY_TOKEN`. **Verify and save** — Meta calls the GET handler and expects the challenge echoed back (the stack must already be running, §7c). Then **Manage** → subscribe to the **messages** field.
+8. **Path to a real number, later.** Add a business phone under Phone numbers (SMS/voice verification), submit the display name for review, and complete Business verification in Business Settings. A newly verified number starts on a limited tier of business-initiated conversations per 24 h that grows with quality rating *[verify — roughly 250]*. None of this affects replies to a student who messaged first.
+
+**The 24-hour rule.** Free-form text can only be sent to a number that messaged the business within the last 24 hours. Every GuruJi reply is a reply to a student's message, so this never bites the tutoring loop — but it is why the test recipient must text first, why a late `send_test_webhook.py` gets Meta error `131047`, and why OTP delivery to the web login is not just "call `send_text`": that is business-initiated and needs an approved *authentication* template.
+
+### 7c. Configure the deployed box
+
+Terraform provisions no secrets store on purpose (`terraform/user_data.sh`, `terraform/outputs.tf`). The three values are hand-edited into `.env` on the instance:
+
+```bash
+aws ssm start-session --target <instance-id>       # from `terraform output`
+cd /opt/guruji && sudo nano .env                    # add the three WHATSAPP_* outbound keys
+docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.caddy.yml \
+  up -d --build api web caddy
+docker compose logs api | grep -i whatsapp          # expect NO "outbound not configured" warning
+```
+
+The `web` and `caddy` rebuild picks up the webhook route's own body-size and rate-limit overrides (`frontend/nginx.conf`, `Caddyfile`). Meta delivers every student's message from a handful of Meta IPs, so the webhook must not share the per-IP `api` rate bucket.
+
+### 7d. Verify end to end
+
+```bash
+# 1. Handshake reachable through Caddy, no basic-auth prompt (webhooks are outside the pilot gate)
+curl -s "https://$HOST/api/v1/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=$WHATSAPP_VERIFY_TOKEN&hub.challenge=123"
+# expect: 123
+
+# 2. From a verified recipient phone, WhatsApp the test number: "hi"
+# expect on the phone within a few seconds: the class prompt
+# then send: "8"                       -> "Class 8 — set!"
+# then send: "pressure kya hota hai?"  -> a Hinglish reply within ~5-25s
+
+# 3. Nothing failed on the way out
+docker compose logs api | grep -E "whatsapp send failed|outbound_reply sent"
+# expect: only "outbound_reply sent" lines
+```
+
+A `whatsapp send failed` line names Meta's error: `131047` means the phone did not message first (24 h window); `190` means the token is dead — regenerate the System User token; `131026` usually means the recipient is not in the test number's verified list.
 
 ---
 
 ## 8. Run the test suite
 
-87 tests. OpenAI is mocked throughout; no test spends money. Postgres is **not** mocked, because `search_chunks()` is SQL — mocking it would test the mock.
+125 tests. OpenAI and Meta's Cloud API are mocked throughout; no test spends money or sends a message. Postgres is **not** mocked, because `search_chunks()` is SQL — mocking it would test the mock. The suite is safe to run repeatedly against the same database: tests that need a never-seen phone number generate one.
 
 ### In Docker (matches CI most closely)
 
@@ -329,7 +386,7 @@ export APP_ENV=local
 pytest
 ```
 
-**Expect:** `87 passed`.
+**Expect:** `125 passed`.
 
 Also run the linter, which is the same command CI runs:
 

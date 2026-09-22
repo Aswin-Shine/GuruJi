@@ -51,9 +51,9 @@ GuruJi makes three commitments that shape every design decision in this reposito
 | Retrieval pipeline + evaluation harness | Working, measured — see [Evaluation](#evaluation) |
 | Corpus ingestion (73 NCERT chapters, Classes 5–10) | Working |
 | Per-chat class and subject selection | Working — pill in the chat header, editable while a chat is empty |
-| Backend test suite | 97 tests, green, runs against a real Postgres in CI |
+| Backend test suite | 125 tests, green, runs against a real Postgres in CI |
 | WhatsApp **inbound** webhook | Working — signature verification, idempotency, allow-list |
-| WhatsApp **outbound** send | **Not implemented.** The reply is logged and returned in the webhook response body; nothing calls the WhatsApp Cloud API. This is the single largest gap. |
+| WhatsApp **outbound** send | Implemented — the webhook acks Meta immediately and delivers the reply through the WhatsApp Cloud API from a background task. Off until the three `WHATSAPP_*` outbound keys are set (then replies are only logged). **Tested against a mocked Cloud API; not yet exercised against a live Meta number** — see [IMPLEMENTATION.md §7](IMPLEMENTATION.md#7-connect-a-real-whatsapp-number). |
 | Real OTP delivery | Not implemented (dev bypass only, fails closed outside `APP_ENV=local`) |
 | DPDP Rules 2025 verifiable parental consent | **Not implemented.** Must be resolved before any real child's data is processed. |
 | Production deployment | Not done. Nothing here terminates TLS. |
@@ -87,9 +87,13 @@ One deployable backend, one database, one LLM provider, two client channels.
               |  curriculum          |  two-pass hybrid retrieval
               |  memory              |  one JSONB row per student
               |  safety              |  moderation flag persistence
+              |  whatsapp            |  outbound send, Meta Cloud API
               +-------+--------------+
                       |                        +--------------+
                       +----------------------->|  OpenAI API  |
+                      |                        +--------------+
+                      |                        +--------------+
+                      +----------------------->|  Meta Graph  |  replies to the phone
                       |                        +--------------+
                       v
           +---------------------------+
@@ -184,7 +188,8 @@ Every recorded run, with full per-kind breakdowns and miss listings, is preserve
 │   │       ├── ai_orchestrator/     the pipeline, the LLM client, prompts/
 │   │       ├── curriculum/          two-pass hybrid retrieval
 │   │       ├── memory/              one JSONB row per student
-│   │       └── safety/              moderation flag persistence
+│   │       ├── safety/              moderation flag persistence
+│   │       └── whatsapp/            outbound send via Meta Cloud API, no tables
 │   ├── scripts/                 operator tooling — never imported by the app
 │   │   ├── ingest_curriculum.py     one chapter: PDF → chunks → embeddings → Postgres
 │   │   ├── ingest_book.py           batch wrapper over a CSV manifest
@@ -193,7 +198,7 @@ Every recorded run, with full per-kind breakdowns and miss listings, is preserve
 │   │   └── send_test_webhook.py     signed mock WhatsApp payload, no Meta account needed
 │   ├── manifests/               per-book chapter manifests (CSV)
 │   ├── eval/                    labelled evaluation set
-│   └── tests/                   97 tests against a real Postgres
+│   └── tests/                   125 tests against a real Postgres
 │
 ├── frontend/                    Preact + TypeScript + Vite, served by nginx
 │   ├── src/screens/             Auth · Onboarding · Chat · Profile · Parent
@@ -242,6 +247,7 @@ Every key lives in `.env` and is documented inline in [`.env.example`](.env.exam
 | `POSTGRES_PASSWORD` | — | Required; Compose fails fast if unset. |
 | `SECRET_KEY` | `dev-only-change-me` | Signs every session token **and** derives parent-link PINs. The app refuses to boot on this default unless `APP_ENV=local`. |
 | `WHATSAPP_APP_SECRET` | `dev-app-secret` | Verifies Meta's webhook signature. Same boot refusal as above. |
+| `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_GRAPH_API_VERSION` | *(empty)* | All three set = replies are delivered to the phone. Any empty = replies are computed and logged only. The token must be a permanent System User token; the version is pinned by hand from the App Dashboard. Boot warns in either direction. |
 | `APP_ENV` | `local` | Any other value makes the application refuse to boot with `DEV_OTP_BYPASS=1`. |
 | `DAILY_SPEND_CAP_USD` | `5` | Suits roughly 20 pilot students. Estimated to break somewhere around 150–250 active students; raise it deliberately rather than discovering the fallback message in a transcript. |
 | `ALLOWED_PHONE_NUMBERS` | *(empty)* | Empty means **open**: anyone who learns the WhatsApp number gets a provisioned account and billed tutoring. Set it for a closed pilot. |
@@ -276,7 +282,7 @@ Two authentication mechanisms, deliberately separate:
 | `GET` | `/v1/curriculum/subjects` | any | `(class, subject)` pairs that actually have embedded chunks |
 | `GET` | `/v1/curriculum/chapters` | any | Chapters available for a class |
 | `GET` | `/v1/webhooks/whatsapp` | verify token | Meta subscription handshake |
-| `POST` | `/v1/webhooks/whatsapp` | HMAC | Inbound message |
+| `POST` | `/v1/webhooks/whatsapp` | HMAC | Inbound message. Returns `{"status":"accepted"}` inside Meta's ack window; the turn runs afterwards and the reply is sent via the Cloud API, never in this body |
 | `POST` | `/v1/conversations/messages` | student | Web-channel send — identity from the token, never the body. Accepts `grade`/`subject`, applied only when a conversation is created |
 | `GET` | `/v1/conversations` | student | Own conversations, paginated |
 | `GET` | `/v1/conversations/{id}/messages` | student (owner) | Transcript |
@@ -326,12 +332,12 @@ Full threat model and control inventory: [`docs/SECURITY.md`](docs/SECURITY.md).
 
 Listed here rather than buried, because anyone evaluating this codebase should not have to go looking.
 
-1. **GuruJi cannot send a WhatsApp message.** Inbound is complete; outbound is not implemented. Meta does not deliver the webhook response body to the user, so on the channel the product is named for, no student currently receives a reply. This blocks real OTP delivery, any public deployment, and the Phase 1 exit criteria.
+1. **Outbound WhatsApp has not been exercised against a live Meta number.** The send path is implemented and tested against a mocked Cloud API, but no Meta app, phone number or token exists yet — every claim about delivery is a claim about the mock until [IMPLEMENTATION.md §7](IMPLEMENTATION.md#7-connect-a-real-whatsapp-number) has been walked once. Real OTP delivery over WhatsApp additionally needs a Meta-approved authentication template and is still not built.
 2. **DPDP Rules 2025 parental consent is unresolved.** The current parent-link flow is student-initiated and student-controlled, which is not verifiable parental consent. This must be settled before a real child's data is processed.
 3. **Refusal accuracy is 88.9% and the code's own kill switch has fired.** `config.py` documents "if refusal accuracy drops below ~90%, set `RAG_LEXICAL_RESCUE=0`". The last recorded run is below that line and the switch has not been flipped. The `--sweep` output shows a grounded floor of 0.45 reaching 100% refusal accuracy at unchanged recall.
 4. **`RAG_THRESHOLD` disagrees between `config.py` (0.35) and `.env.example` (0.40).** The recorded evaluation runs were performed at 0.40. Reconcile these before quoting results anywhere else.
 5. **`RAG_WEAK_THRESHOLD` has no measurable effect** on the current evaluation set — every value from 0.20 to 0.35 produces bit-identical metrics, most likely because lexical rescue keeps matches the weak floor would otherwise drop.
-6. **Retrieval p50 is 3.7 s and rising with corpus size**, on a synchronous pipeline that must answer inside Meta's acknowledgment window. The asynchronous ack pattern is a Phase 2 item.
+6. **Retrieval p50 is 3.7 s and rising with corpus size.** The webhook now acks Meta before the turn runs, so this no longer risks dropped messages — but a student on WhatsApp still waits 4–8 s with no typing indicator or read receipt, and the background work runs on the same single container's thread pool. Attribute the latency growth before assuming an index fixes it.
 7. **The evaluation set is 82% Class 8**, with no Class 5 rows at all.
 8. **No staging environment.** Every deployment would be its first real-world test.
 
