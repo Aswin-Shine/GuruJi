@@ -80,11 +80,22 @@
 	# The photo endpoint carries an image; everything else is short text. Two
 	# limits rather than one raised limit, so a 2 MB body is only accepted on the
 	# single route that has a use for it.
+	# The three matchers are mutually exclusive on purpose: Caddy applies EVERY
+	# request_body that matches, nesting the limits, so an unmatched 64KB block
+	# would cap the photo and webhook routes at 64KB too (verified: a 100KB webhook
+	# POST got 413 when the default block had no matcher).
 	@photo path /api/v1/conversations/photo
 	request_body @photo {
 		max_size 6MB
 	}
-	request_body {
+	# Meta batches several messages and status events per webhook POST. Matches
+	# nginx's own 256k on this one route; every other route keeps the 64KB cap.
+	@webhook path /api/v1/webhooks/whatsapp
+	request_body @webhook {
+		max_size 256KB
+	}
+	@small not path /api/v1/conversations/photo /api/v1/webhooks/whatsapp
+	request_body @small {
 		max_size 64KB
 	}
 
