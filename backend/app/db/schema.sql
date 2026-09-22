@@ -7,6 +7,13 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- Phones are stored "+<digits>" (identity.normalize_phone). Rows written by the
+-- WhatsApp webhook before that rule existed lack the "+". Idempotent; a row whose
+-- "+" form already exists is left alone rather than breaking the UNIQUE constraint.
+UPDATE users u SET phone_number = '+' || u.phone_number
+WHERE u.phone_number NOT LIKE '+%'
+  AND NOT EXISTS (SELECT 1 FROM users o WHERE o.phone_number = '+' || u.phone_number);
+
 CREATE TABLE IF NOT EXISTS students (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID UNIQUE NOT NULL REFERENCES users(id),

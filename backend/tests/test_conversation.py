@@ -5,9 +5,16 @@ import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+from unittest.mock import MagicMock
+
+import httpx
+from sqlalchemy import text as _t
+
 from app.config import WHATSAPP_APP_SECRET
-from app.modules.ai_orchestrator.orchestrator import TurnResult
+from app.modules.ai_orchestrator.orchestrator import FALLBACK_UNAVAILABLE, TurnResult
+from app.modules.conversation import router as conv_router
 from app.modules.conversation import service
+from app.modules.whatsapp import service as whatsapp
 from tests.conftest import make_student
 
 
@@ -34,6 +41,38 @@ def _msg_payload(phone: str, text: str, msg_id: str | None = "wamid.TEST"):
     if msg_id is not None:
         msg["id"] = msg_id
     return {"entry": [{"changes": [{"value": {"messages": [msg]}}]}]}
+
+
+def _phone_of(db, student) -> str:
+    return db.execute(_t("SELECT phone_number FROM users WHERE id = ("
+                         "SELECT user_id FROM students WHERE id = :s)"), {"s": str(student.id)}).scalar_one()
+
+
+def _claimed(db, msg_id: str) -> bool:
+    return db.execute(_t("SELECT count(*) FROM processed_webhook_messages WHERE whatsapp_message_id = :i"),
+                      {"i": msg_id}).scalar_one() == 1
+
+
+def _fresh_phone() -> str:
+    """A number no earlier test (or earlier RUN — the database persists between
+    runs) has ever onboarded. A fixed literal here passed once and then failed
+    forever, because the second run found it already a student."""
+    import uuid as _uuid
+    return f"+9190{_uuid.uuid4().int % 10**8:08d}"
+
+
+def _outbound_configured(post_mock):
+    """Patch the sender into a configured state with httpx.post replaced.
+
+    Module attributes, not env: config is read once at import, so the sender's own
+    names are what its functions actually consult."""
+    return (
+        patch.object(whatsapp, "WHATSAPP_ACCESS_TOKEN", "tok"),
+        patch.object(whatsapp, "WHATSAPP_PHONE_NUMBER_ID", "123"),
+        patch.object(whatsapp, "WHATSAPP_GRAPH_API_VERSION", "v0.0"),
+        patch.object(whatsapp, "RETRY_DELAY_S", 0),
+        patch.object(whatsapp.httpx, "post", post_mock),
+    )
 
 
 def test_webhook_rejects_bad_signature(client):
@@ -175,7 +214,7 @@ def test_duplicate_webhook_message_id_short_circuits(client, db):
         first = _post_webhook(client, payload)
         second = _post_webhook(client, payload)
 
-    assert first.status_code == 200 and first.json()["status"] == "ok"
+    assert first.status_code == 200 and first.json()["status"] == "accepted"
     assert second.status_code == 200 and second.json()["status"] == "duplicate"
     assert mock_orch.call_count == 1  # second delivery never reached the model
     count = db.execute(_t(
@@ -192,9 +231,10 @@ def test_webhook_missing_message_id_still_processes(client, db):
     _, student, _ = make_student(db)
     phone = db.execute(_t("SELECT phone_number FROM users WHERE id = ("
                           "SELECT user_id FROM students WHERE id = :s)"), {"s": str(student.id)}).scalar_one()
-    with patch.object(service, "orchestrate", return_value=_turn("ok", 5, "test-model")):
+    with patch.object(service, "orchestrate", return_value=_turn("ok", 5, "test-model")) as mock_orch:
         resp = _post_webhook(client, _msg_payload(phone, "gravity samjhao", msg_id=None))
-    assert resp.status_code == 200 and resp.json()["status"] == "ok"
+    assert resp.status_code == 200 and resp.json()["status"] == "accepted"
+    assert mock_orch.call_count == 1
 
 
 def test_webhook_rejects_oversized_message(client, db):
@@ -204,10 +244,12 @@ def test_webhook_rejects_oversized_message(client, db):
     _, student, _ = make_student(db)
     phone = db.execute(_t("SELECT phone_number FROM users WHERE id = ("
                           "SELECT user_id FROM students WHERE id = :s)"), {"s": str(student.id)}).scalar_one()
-    with patch.object(service, "orchestrate") as mock_orch:
+    with patch.object(service, "orchestrate") as mock_orch, \
+         patch.object(conv_router.whatsapp, "send_text") as mock_send:
         resp = _post_webhook(client, _msg_payload(phone, "x" * 2001, f"wamid.{_uuid.uuid4()}"))
-    assert resp.status_code == 200 and resp.json()["status"] == "rejected"
+    assert resp.status_code == 200 and resp.json()["status"] == "accepted"
     mock_orch.assert_not_called()
+    mock_send.assert_called_once_with(phone, conv_router.TOO_LONG)
 
 
 def test_webhook_rejects_empty_message(client, db):
@@ -216,10 +258,245 @@ def test_webhook_rejects_empty_message(client, db):
     _, student, _ = make_student(db)
     phone = db.execute(_t("SELECT phone_number FROM users WHERE id = ("
                           "SELECT user_id FROM students WHERE id = :s)"), {"s": str(student.id)}).scalar_one()
-    with patch.object(service, "orchestrate") as mock_orch:
+    with patch.object(service, "orchestrate") as mock_orch, \
+         patch.object(conv_router.whatsapp, "send_text") as mock_send:
         resp = _post_webhook(client, _msg_payload(phone, "   \n  ", f"wamid.{_uuid.uuid4()}"))
-    assert resp.status_code == 200 and resp.json()["status"] == "rejected"
+    assert resp.status_code == 200 and resp.json()["status"] == "accepted"
     mock_orch.assert_not_called()
+    mock_send.assert_called_once_with(phone, conv_router.TOO_LONG)
+
+
+# ---- outbound delivery + async ack --------------------------------------------
+
+
+def test_webhook_acks_before_processing_and_never_returns_the_reply(client, db):
+    """The body is an ack. Meta retries anything slower than ~3-5s and a turn is
+    routinely longer, so processing is scheduled, not inline. Patching the task
+    proves the handler itself never reaches the model."""
+    import uuid as _uuid
+    _, student, _ = make_student(db)
+    phone = _phone_of(db, student)
+    msg_id = f"wamid.{_uuid.uuid4()}"
+    with patch.object(conv_router, "_process_inbound_task") as mock_task, \
+         patch.object(service, "orchestrate") as mock_orch:
+        resp = _post_webhook(client, _msg_payload(phone, "gravity samjhao", msg_id))
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "accepted", "accepted": 1}  # no reply key, ever
+    mock_task.assert_called_once_with(phone, "gravity samjhao", msg_id)
+    mock_orch.assert_not_called()
+
+
+def test_duplicate_never_schedules_the_task(client, db):
+    import uuid as _uuid
+    _, student, _ = make_student(db)
+    phone = _phone_of(db, student)
+    payload = _msg_payload(phone, "hi", f"wamid.{_uuid.uuid4()}")
+    with patch.object(conv_router, "_process_inbound_task") as mock_task:
+        _post_webhook(client, payload)
+        second = _post_webhook(client, payload)
+    assert second.json()["status"] == "duplicate"
+    assert mock_task.call_count == 1
+
+
+def test_reply_is_sent_through_meta_cloud_api(client, db):
+    """Exact request shape: URL from version + phone_number_id, bearer header,
+    Meta's text envelope, `to` without a leading +."""
+    import uuid as _uuid
+    _, student, _ = make_student(db)
+    phone = _phone_of(db, student)
+    post = MagicMock(return_value=MagicMock(status_code=200))
+    a, b, c, d, e = _outbound_configured(post)
+    with a, b, c, d, e, patch.object(service, "orchestrate", return_value=_turn("Bilkul sahi!", 10, "m")):
+        resp = _post_webhook(client, _msg_payload(phone, "5 x 7?", f"wamid.{_uuid.uuid4()}"))
+    assert resp.json() == {"status": "accepted", "accepted": 1}
+    post.assert_called_once()
+    args, kwargs = post.call_args
+    assert args[0] == "https://graph.facebook.com/v0.0/123/messages"
+    assert kwargs["headers"] == {"Authorization": "Bearer tok"}
+    assert kwargs["json"] == {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": phone.lstrip("+"),
+        "type": "text",
+        "text": {"preview_url": False, "body": "Bilkul sahi!"},
+    }
+    assert not phone.lstrip("+").startswith("+") and kwargs["json"]["to"] == phone.lstrip("+")
+
+
+def test_onboarding_prompts_are_sent_not_just_the_tutoring_reply(client, db):
+    """Every branch that has words for the student must deliver them: on WhatsApp
+    there is no other surface to show an onboarding prompt on."""
+    import uuid as _uuid
+    fresh = _fresh_phone()
+    post = MagicMock(return_value=MagicMock(status_code=200))
+    a, b, c, d, e = _outbound_configured(post)
+    with a, b, c, d, e, patch.object(conv_router, "ALLOWED_PHONE_NUMBERS", []):
+        _post_webhook(client, _msg_payload(fresh, "hi", f"wamid.{_uuid.uuid4()}"))
+        _post_webhook(client, _msg_payload(fresh, "8", f"wamid.{_uuid.uuid4()}"))
+    bodies = [c.kwargs["json"]["text"]["body"] for c in post.call_args_list]
+    assert bodies == [conv_router.ONBOARD_ASK_GRADE, conv_router.ONBOARD_DONE.format(grade=8)]
+    assert all(c.kwargs["json"]["to"] == fresh.lstrip("+") for c in post.call_args_list)
+
+
+def test_allowlist_refusal_is_sent_to_the_stranger(client, db):
+    import uuid as _uuid
+    stranger = _fresh_phone()
+    post = MagicMock(return_value=MagicMock(status_code=200))
+    a, b, c, d, e = _outbound_configured(post)
+    with a, b, c, d, e, patch.object(conv_router, "ALLOWED_PHONE_NUMBERS", ["+919999999999"]):
+        _post_webhook(client, _msg_payload(stranger, "hi", f"wamid.{_uuid.uuid4()}"))
+    post.assert_called_once()
+    assert post.call_args.kwargs["json"]["text"]["body"] == conv_router.NOT_INVITED
+    assert db.execute(_t("SELECT count(*) FROM users WHERE phone_number = :p"), {"p": stranger}).scalar_one() == 0
+
+
+def test_unconfigured_outbound_logs_only_and_still_persists_the_turn(client, db):
+    """No Meta account: the turn completes and is stored, nothing leaves the box."""
+    import uuid as _uuid
+    _, student, _ = make_student(db)
+    phone = _phone_of(db, student)
+    with patch.object(whatsapp, "WHATSAPP_ACCESS_TOKEN", ""), \
+         patch.object(whatsapp, "WHATSAPP_PHONE_NUMBER_ID", ""), \
+         patch.object(whatsapp, "WHATSAPP_GRAPH_API_VERSION", ""), \
+         patch.object(whatsapp.httpx, "post") as post, \
+         patch.object(service, "orchestrate", return_value=_turn("ok", 5, "m")):
+        resp = _post_webhook(client, _msg_payload(phone, "gravity samjhao", f"wamid.{_uuid.uuid4()}"))
+    assert resp.json()["status"] == "accepted"
+    post.assert_not_called()
+    count = db.execute(_t(
+        "SELECT count(*) FROM messages m JOIN conversations c ON c.id = m.conversation_id "
+        "WHERE c.student_id = :s AND m.sender = 'assistant'"), {"s": str(student.id)}).scalar_one()
+    assert count == 1
+
+
+def test_send_transport_failure_retries_once_and_keeps_the_claim(client, db):
+    """A delivery failure is not a processing failure: the reply is already in
+    `messages`, so the claim stays and Meta's (rare) retry is still deduped."""
+    import uuid as _uuid
+    _, student, _ = make_student(db)
+    phone = _phone_of(db, student)
+    msg_id = f"wamid.{_uuid.uuid4()}"
+    post = MagicMock(side_effect=httpx.ConnectError("boom"))
+    a, b, c, d, e = _outbound_configured(post)
+    with a, b, c, d, e, patch.object(service, "orchestrate", return_value=_turn("ok", 5, "m")):
+        resp = _post_webhook(client, _msg_payload(phone, "gravity samjhao", msg_id))
+    assert resp.status_code == 200 and resp.json()["status"] == "accepted"
+    assert post.call_count == 2
+    assert _claimed(db, msg_id)
+    count = db.execute(_t(
+        "SELECT count(*) FROM messages m JOIN conversations c ON c.id = m.conversation_id "
+        "WHERE c.student_id = :s AND m.sender = 'assistant'"), {"s": str(student.id)}).scalar_one()
+    assert count == 1
+
+
+def test_send_4xx_does_not_retry(client, db):
+    """131047 (outside the 24h window) fails identically 1.5s later — one call."""
+    import uuid as _uuid
+    _, student, _ = make_student(db)
+    phone = _phone_of(db, student)
+    msg_id = f"wamid.{_uuid.uuid4()}"
+    failed = MagicMock(status_code=400)
+    failed.json.return_value = {"error": {"code": 131047, "message": "Re-engagement message"}}
+    post = MagicMock(return_value=failed)
+    a, b, c, d, e = _outbound_configured(post)
+    with a, b, c, d, e, patch.object(service, "orchestrate", return_value=_turn("ok", 5, "m")):
+        resp = _post_webhook(client, _msg_payload(phone, "gravity samjhao", msg_id))
+    assert resp.json()["status"] == "accepted"
+    assert post.call_count == 1
+    assert _claimed(db, msg_id)
+
+
+def test_send_5xx_retries_once(client, db):
+    import uuid as _uuid
+    _, student, _ = make_student(db)
+    phone = _phone_of(db, student)
+    post = MagicMock(side_effect=[MagicMock(status_code=503), MagicMock(status_code=200)])
+    a, b, c, d, e = _outbound_configured(post)
+    with a, b, c, d, e, patch.object(service, "orchestrate", return_value=_turn("ok", 5, "m")):
+        _post_webhook(client, _msg_payload(phone, "gravity samjhao", f"wamid.{_uuid.uuid4()}"))
+    assert post.call_count == 2
+
+
+def test_processing_crash_releases_claim_and_tells_the_student(client, db):
+    """Once the 200 has gone out Meta will not retry, so the student must hear
+    something — the honest network-slow fallback — and the claim must not record a
+    message that was never actually processed."""
+    import uuid as _uuid
+    _, student, _ = make_student(db)
+    phone = _phone_of(db, student)
+    msg_id = f"wamid.{_uuid.uuid4()}"
+    with patch.object(conv_router.service, "handle_student_message", side_effect=RuntimeError("db exploded")), \
+         patch.object(conv_router.whatsapp, "send_text") as mock_send:
+        resp = _post_webhook(client, _msg_payload(phone, "gravity samjhao", msg_id))
+    assert resp.status_code == 200 and resp.json()["status"] == "accepted"
+    mock_send.assert_called_once_with(phone, FALLBACK_UNAVAILABLE)
+    assert not _claimed(db, msg_id)
+
+
+def test_batched_payload_processes_every_message_in_order(client, db):
+    """Meta may batch messages across entries/changes. Reading only messages[0]
+    dropped the rest silently; every one must be claimed and answered, in order."""
+    import uuid as _uuid
+    _, student, _ = make_student(db)
+    phone = _phone_of(db, student)
+    ids = [f"wamid.{_uuid.uuid4()}" for _ in range(3)]
+    msg = lambda i, t: {"id": i, "from": phone, "type": "text", "text": {"body": t}}  # noqa: E731
+    payload = {"entry": [
+        {"changes": [{"value": {"messages": [msg(ids[0], "pehla"), msg(ids[1], "doosra")]}}]},
+        {"changes": [{"value": {"statuses": [{"id": "x"}]}}, {"value": {"messages": [msg(ids[2], "teesra")]}}]},
+    ]}
+    with patch.object(service, "orchestrate", side_effect=lambda *a, **k: _turn("ok")) as mock_orch, \
+         patch.object(conv_router.whatsapp, "send_text") as mock_send:
+        resp = _post_webhook(client, payload)
+        again = _post_webhook(client, payload)
+    assert resp.json() == {"status": "accepted", "accepted": 3}
+    assert again.json() == {"status": "duplicate", "accepted": 0}
+    assert mock_orch.call_count == 3 and mock_send.call_count == 3
+    assert all(_claimed(db, i) for i in ids)
+    sent_in = db.execute(_t(
+        "SELECT m.content FROM messages m JOIN conversations c ON c.id = m.conversation_id "
+        "WHERE c.student_id = :s AND m.sender = 'student' ORDER BY m.created_at"), {"s": str(student.id)}).scalars().all()
+    assert sent_in == ["pehla", "doosra", "teesra"]
+
+
+def test_memory_failure_after_send_does_not_send_the_fallback(client, db):
+    """Once the reply is out, a later failure (memory regeneration) must not follow
+    it with 'network slow' nor release the claim of a turn that did complete."""
+    import uuid as _uuid
+    _, student, _ = make_student(db)
+    phone = _phone_of(db, student)
+    msg_id = f"wamid.{_uuid.uuid4()}"
+    regen = service.RegenArgs(student.id, student.grade, "t")
+    with patch.object(conv_router.service, "handle_student_message", return_value=(_turn("Jawab"), None, regen)), \
+         patch.object(conv_router.memory, "regenerate", side_effect=RuntimeError("db down")), \
+         patch.object(conv_router.whatsapp, "send_text") as mock_send:
+        _post_webhook(client, _msg_payload(phone, "gravity samjhao", msg_id))
+    mock_send.assert_called_once_with(phone, "Jawab")
+    assert _claimed(db, msg_id)
+
+
+def test_web_and_whatsapp_resolve_to_the_same_account(client, db):
+    """The web client sends +91..., Meta sends 91... — one student, one account."""
+    _, student, _ = make_student(db)
+    phone = _phone_of(db, student)
+    with patch.object(service, "orchestrate", return_value=_turn("ok")), \
+         patch.object(conv_router.whatsapp, "send_text"):
+        resp = _post_webhook(client, _msg_payload(phone.lstrip("+"), "gravity samjhao", f"wamid.{phone}.n"))
+    assert resp.json()["accepted"] == 1
+    n = db.execute(_t("SELECT count(*) FROM users WHERE phone_number IN (:a, :b)"),
+                   {"a": phone, "b": phone.lstrip("+")}).scalar_one()
+    assert n == 1
+    convs = db.execute(_t("SELECT count(*) FROM conversations WHERE student_id = :s AND channel = 'whatsapp'"),
+                       {"s": str(student.id)}).scalar_one()
+    assert convs == 1
+
+
+def test_send_text_never_raises_even_when_the_client_explodes():
+    """The sender is called after the reply is persisted; nothing it does may
+    unwind the turn."""
+    a, b, c, d, e = _outbound_configured(MagicMock(side_effect=RuntimeError("weird")))
+    with a, b, c, d, e:
+        assert whatsapp.send_text("+919000000001", "hi") is False
 
 
 def test_window_widened_to_eight(db):

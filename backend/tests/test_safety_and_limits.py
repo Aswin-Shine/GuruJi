@@ -152,12 +152,16 @@ def test_allowlisted_number_passes_and_unknown_number_is_dropped(client, db):
     stranger = "+919000000001"
 
     with patch.object(conv_router, "ALLOWED_PHONE_NUMBERS", [phone]), \
-         patch("app.modules.conversation.service.orchestrate", return_value=_turn("ok", 5, "m")):
+         patch.object(conv_router.whatsapp, "send_text") as mock_send, \
+         patch("app.modules.conversation.service.orchestrate", return_value=_turn("ok", 5, "m")) as mock_orch:
         allowed = _post_webhook(client, _msg_payload(phone, "gravity samjhao", f"wamid.{_uuid.uuid4()}"))
         blocked = _post_webhook(client, _msg_payload(stranger, "gravity samjhao", f"wamid.{_uuid.uuid4()}"))
 
-    assert allowed.json()["status"] == "ok"
-    assert blocked.status_code == 200 and blocked.json()["status"] == "not_allowed"
+    # Both are acked (Meta needs a 200 regardless); what differs is what was done.
+    assert allowed.json()["status"] == "accepted" and blocked.json()["status"] == "accepted"
+    assert mock_orch.call_count == 1  # only the allow-listed number reached the model
+    sent = {c.args[0]: c.args[1] for c in mock_send.call_args_list}
+    assert sent[phone] == "ok" and sent[stranger] == conv_router.NOT_INVITED
     # and no account was created for the stranger
     assert db.execute(_t("SELECT count(*) FROM users WHERE phone_number = :p"),
                       {"p": stranger}).scalar_one() == 0
@@ -170,9 +174,12 @@ def test_empty_allowlist_means_open(client, db):
     from tests.test_conversation import _msg_payload, _post_webhook
 
     with patch.object(conv_router, "ALLOWED_PHONE_NUMBERS", []), \
+         patch.object(conv_router.whatsapp, "send_text") as mock_send, \
          patch("app.modules.conversation.service.orchestrate", return_value=_turn("ok", 5, "m")):
         resp = _post_webhook(client, _msg_payload("+919000000002", "7", f"wamid.{_uuid.uuid4()}"))
-    assert resp.json()["status"] in {"ok", "onboarded", "onboarding"}
+    assert resp.json()["status"] == "accepted"
+    # Reached onboarding rather than the allow-list refusal.
+    assert mock_send.call_args.args[1] != conv_router.NOT_INVITED
 
 
 def test_health_reports_503_when_database_is_down(client):

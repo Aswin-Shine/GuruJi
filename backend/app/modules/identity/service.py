@@ -76,7 +76,15 @@ def revoke_token(db: Session, token: str) -> bool:
     return True
 
 
+def normalize_phone(phone_number: str) -> str:
+    """One stored form for every channel: "+" then digits. The web client sends
+    "+91XXXXXXXXXX" but Meta's webhook sends "91XXXXXXXXXX" — stored raw, the same
+    student became two accounts, one per channel."""
+    return "+" + "".join(c for c in phone_number if c.isdigit())
+
+
 def get_or_create_user(db: Session, phone_number: str, role: str) -> User:
+    phone_number = normalize_phone(phone_number)
     user = db.execute(select(User).where(User.phone_number == phone_number)).scalar_one_or_none()
     if user is None:
         user = User(phone_number=phone_number, role=role)

@@ -15,7 +15,10 @@ from app.config import (
     DEFAULT_WHATSAPP_VERIFY_TOKEN,
     DEV_OTP_BYPASS,
     SECRET_KEY,
+    WHATSAPP_ACCESS_TOKEN,
     WHATSAPP_APP_SECRET,
+    WHATSAPP_GRAPH_API_VERSION,
+    WHATSAPP_PHONE_NUMBER_ID,
     WHATSAPP_VERIFY_TOKEN,
 )
 from app.db.session import get_db, init_db
@@ -49,6 +52,40 @@ def _check_phone_allowlist() -> None:
         log.warning(
             "COST: ALLOWED_PHONE_NUMBERS is empty and APP_ENV=%s — any phone number that "
             "messages this bot gets provisioned and billed. Set it for a closed pilot.", APP_ENV
+        )
+
+
+def _check_whatsapp_outbound() -> None:
+    """Warn — never refuse — when outbound WhatsApp configuration is off for the env.
+
+    Unconfigured outside local dev means every WhatsApp student gets silence: the
+    message is processed, the reply is persisted, and nothing reaches the phone.
+    That is a legitimate choice for a web-only pilot, so it is a warning, but it
+    has to be visible at boot rather than discovered in a transcript review.
+    Configured INSIDE local dev is the opposite hazard: a developer's test webhook
+    sends a real message to whatever number they typed."""
+    keys = (
+        ("WHATSAPP_ACCESS_TOKEN", WHATSAPP_ACCESS_TOKEN),
+        ("WHATSAPP_PHONE_NUMBER_ID", WHATSAPP_PHONE_NUMBER_ID),
+        ("WHATSAPP_GRAPH_API_VERSION", WHATSAPP_GRAPH_API_VERSION),
+    )
+    missing = [name for name, value in keys if not value]
+    if missing and len(missing) < len(keys):
+        log.warning(
+            "WHATSAPP: %s empty while the other outbound key(s) are set — outbound is "
+            "DISABLED until all three are present; replies will only be logged.",
+            ", ".join(missing),
+        )
+    elif missing and APP_ENV != "local":
+        log.warning(
+            "WHATSAPP: outbound not configured (%s empty) and APP_ENV=%s — inbound "
+            "messages are processed but replies are only logged, never delivered.",
+            ", ".join(missing), APP_ENV,
+        )
+    elif not missing and APP_ENV == "local":
+        log.warning(
+            "WHATSAPP: outbound is configured while APP_ENV=local — this dev instance "
+            "will send REAL WhatsApp messages to every number it replies to."
         )
 
 
@@ -100,6 +137,7 @@ async def lifespan(app: FastAPI):
     _check_otp_bypass()
     _check_secrets()
     _check_phone_allowlist()
+    _check_whatsapp_outbound()
     init_db()
     yield
 

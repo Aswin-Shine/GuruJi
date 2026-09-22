@@ -31,12 +31,13 @@ from app.config import (
     WHATSAPP_APP_SECRET,
     WHATSAPP_VERIFY_TOKEN,
 )
-from app.db.session import get_db
+from app.db.session import SessionLocal, get_db
 from app.modules.conversation import service
 from app.modules.conversation.schemas import ConversationOut, MessageOut, SendMessageIn, SendMessageOut
 from app.modules.identity import service as identity
 from app.modules.ai_orchestrator import llm, vision
-from app.modules.ai_orchestrator.orchestrator import FALLBACK_MODERATED
+from app.modules.ai_orchestrator.orchestrator import FALLBACK_MODERATED, FALLBACK_UNAVAILABLE
+from app.modules.whatsapp import service as whatsapp
 from app.modules.safety import service as safety
 from app.modules.memory import service as memory
 from app.modules.identity.dependencies import CurrentUser, get_current_user
@@ -70,26 +71,33 @@ def _verify_signature(body: bytes, signature_header: str) -> bool:
     return hmac.compare_digest(signature_header.removeprefix("sha256="), expected)
 
 
-def _extract_message(payload: dict) -> tuple[str, str, str | None] | None:
-    """Returns (phone, text, whatsapp_message_id) or None for non-text/status events.
+def _extract_messages(payload: dict) -> list[tuple[str, str, str | None]]:
+    """Every text message in the payload as (phone, text, whatsapp_message_id).
 
-    The message id may be absent on malformed or non-standard payloads. That is NOT a
-    rejection — dedupe is simply skipped."""
-    try:
-        msg = payload["entry"][0]["changes"][0]["value"]["messages"][0]
-        if msg.get("type") != "text":
-            return None
-        return msg["from"], msg["text"]["body"], msg.get("id")
-    except (KeyError, IndexError):
-        return None
+    Meta may batch several messages across entries/changes into one POST, so all of
+    them are walked — reading only the first would drop the rest silently. Status
+    events and non-text messages are skipped. A missing message id is NOT a
+    rejection — dedupe is simply skipped for that message."""
+    out = []
+    for entry in payload.get("entry") or []:
+        for change in entry.get("changes") or []:
+            for msg in (change.get("value") or {}).get("messages") or []:
+                try:
+                    if msg.get("type") == "text":
+                        out.append((msg["from"], msg["text"]["body"], msg.get("id")))
+                except (KeyError, TypeError, AttributeError):
+                    continue
+    return out
 
 
 def _claim_message(db: Session, message_id: str) -> bool:
     """Claim a WhatsApp message id. True = ours to process, False = duplicate.
 
-    Meta delivers at-least-once and retries anything slower than its ~3-5s ack window,
-    which this synchronous pipeline routinely is. Without this, a retry buys a second
-    billed LLM call and a duplicate row in `messages`."""
+    Meta delivers at-least-once. The webhook now acks inside Meta's ~3-5s window and
+    processes afterwards, so retries should be rare — but a lost 200 (network blip,
+    container restart mid-response) still produces one, and without this claim that
+    retry buys a second billed LLM call, a duplicate row in `messages`, and a
+    duplicate reply on the student's phone."""
     inserted = db.execute(
         text("INSERT INTO processed_webhook_messages (whatsapp_message_id) VALUES (:i) ON CONFLICT DO NOTHING"),
         {"i": message_id},
@@ -101,9 +109,11 @@ def _claim_message(db: Session, message_id: str) -> bool:
 def _release_message(db: Session, message_id: str) -> None:
     """Undo the claim when processing raises.
 
-    Without this, a crash after the claim means Meta's retry is deduped away and the
-    student's question is lost silently — a worse failure than the duplicate the claim
-    exists to prevent."""
+    The claim table is a record of messages actually processed, so a crashed one
+    must not sit in it. Since the ack has already gone out by the time processing
+    runs, Meta will not normally retry — the student is told to try again instead
+    (see _process_inbound_task) — but if Meta never received our 200 its retry must
+    be free to reprocess rather than be deduped into silence."""
     try:
         db.rollback()
         db.execute(text("DELETE FROM processed_webhook_messages WHERE whatsapp_message_id = :i"), {"i": message_id})
@@ -123,7 +133,12 @@ def webhook_inbound(
     signature: str = Header("", alias="X-Hub-Signature-256"),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Inbound WhatsApp message.
+    """Inbound WhatsApp message: verify, claim, ack, and hand off.
+
+    The response is an ACK, not the answer. Meta retries anything slower than its
+    ~3-5s window and a tutoring turn is routinely 4-8s (retrieval p50 alone is
+    3.7s), so the pipeline runs AFTER this returns, as a background task, and the
+    reply reaches the student through the Cloud API rather than this body.
 
     Deliberately a plain `def`, so Starlette runs it on the thread pool. As `async def`
     calling only blocking I/O (sync SQLAlchemy, sync OpenAI client) it would serialise
@@ -137,43 +152,82 @@ def webhook_inbound(
         payload = json.loads(body)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid JSON")
-    extracted = _extract_message(payload)
-    if extracted is None:
+    if not isinstance(payload, dict):
         return {"status": "ignored"}
-    phone, text_in, message_id = extracted
+    messages = _extract_messages(payload)
+    if not messages:
+        return {"status": "ignored"}
 
-    # Gates everything below: a duplicate must never reach the point where a second
-    # LLM call is billed or a second memory-regeneration task is scheduled.
-    if message_id is None:
-        log.warning("webhook message missing id, dedupe skipped")
-    elif not _claim_message(db, message_id):
-        return {"status": "duplicate", "reply": None}
+    accepted = 0
+    for phone, text_in, message_id in messages:
+        # Gates everything below: a duplicate must never reach the point where a
+        # second LLM call is billed or a second reply is sent.
+        if message_id is None:
+            log.warning("webhook message missing id, dedupe skipped")
+        elif not _claim_message(db, message_id):
+            continue
+        # BackgroundTasks run in order, so a student's batched messages are
+        # answered in the order they were sent.
+        background_tasks.add_task(_process_inbound_task, phone, text_in, message_id)
+        accepted += 1
+    return {"status": "accepted" if accepted else "duplicate", "accepted": accepted}
 
+
+def _process_inbound_task(phone: str, text_in: str, message_id: str | None) -> None:
+    """The whole turn, after the ack. Runs on the thread pool once the 200 is sent.
+
+    Opens its OWN session: get_db() has closed the request's by the time a
+    background task runs. Never raises — an exception here would surface only in
+    the server log after the response, so it is handled in full: the claim is
+    released, the student gets the honest network-slow fallback, and the memory
+    regeneration is simply skipped."""
+    db = SessionLocal()
     try:
-        return _process_inbound(db, background_tasks, phone, text_in)
+        status, reply, regen = _process_inbound(db, phone, text_in)
     except Exception:
+        log.exception("webhook processing failed phone=%s", phone)
         if message_id is not None:
             _release_message(db, message_id)
-        raise
+        whatsapp.send_text(phone, FALLBACK_UNAVAILABLE)
+        return
+    finally:
+        db.close()
+
+    # Outside the try above: once the turn is persisted, nothing after it may send
+    # the failure fallback or release the claim — the student already has an answer.
+    if reply is not None:
+        whatsapp.send_text(phone, reply)  # never raises
+    log.info("webhook_processed phone=%s status=%s", phone, status)
+    if regen is not None:
+        # After the send, so summarisation never sits between the student and
+        # their answer.
+        try:
+            memory.regenerate(regen.student_id, regen.grade, regen.transcript)
+        except Exception:
+            log.exception("memory regeneration failed student_id=%s", regen.student_id)
 
 
-def _process_inbound(db: Session, background_tasks: BackgroundTasks, phone: str, text_in: str) -> dict:
-    # Same length ceiling send_message() enforces. Returns 200 with a status body,
-    # never an HTTPException — Meta requires a 200 here regardless of outcome.
+def _process_inbound(db: Session, phone: str, text_in: str) -> tuple[str, str | None, service.RegenArgs | None]:
+    """One inbound turn. Returns (status, reply_or_None, regen_args_or_None).
+
+    Every branch returns a reply for the caller to deliver — onboarding prompts and
+    refusals included — because on WhatsApp there is no other channel to say it on.
+    Nothing here raises for a product reason; a raise means a genuine fault."""
+    # Same length ceiling send_message() enforces.
     if not text_in.strip() or len(text_in) > MAX_INBOUND_CHARS:
-        return {"status": "rejected", "reply": TOO_LONG}
+        return "rejected", TOO_LONG, None
 
     # Checked BEFORE get_or_create_user, which provisions an account on first contact,
     # so an unknown number must never reach it. Empty list = open.
     if ALLOWED_PHONE_NUMBERS and phone.lstrip("+") not in {p.lstrip("+") for p in ALLOWED_PHONE_NUMBERS}:
         log.warning("inbound from non-allowlisted number, dropped")
-        return {"status": "not_allowed", "reply": NOT_INVITED}
+        return "not_allowed", NOT_INVITED, None
 
     user = identity.get_or_create_user(db, phone, "student")
     if user.role != "student":
-        return {"status": "ignored", "reply": None}
+        return "ignored", None, None
     if service.rate_limited(user.id):
-        return {"status": "rate_limited", "reply": "Thoda dheere, dost! Ek minute ruk ke phir poochho. 😅"}
+        return "rate_limited", "Thoda dheere, dost! Ek minute ruk ke phir poochho. 😅", None
 
     student = profile.get_student_by_user(db, user.id)
     if student is None:
@@ -183,18 +237,12 @@ def _process_inbound(db: Session, background_tasks: BackgroundTasks, phone: str,
         stripped = text_in.strip()
         if stripped.isdigit() and 5 <= int(stripped) <= 10:
             student = profile.create_student(db, user.id, int(stripped), "NCERT", "hinglish")
-            return {"status": "onboarded", "reply": ONBOARD_DONE.format(grade=student.grade)}
-        return {"status": "onboarding", "reply": ONBOARD_ASK_GRADE}
+            return "onboarded", ONBOARD_DONE.format(grade=student.grade), None
+        return "onboarding", ONBOARD_ASK_GRADE, None
 
     turn, _, regen = service.handle_student_message(db, student, "whatsapp", text_in)
-    if regen is not None:
-        # Off the request path. regenerate() opens its own session, because the
-        # request's is closed by get_db() the moment this response returns.
-        background_tasks.add_task(memory.regenerate, regen.student_id, regen.grade, regen.transcript)
-    # NOTE: the reply is logged and returned in the webhook response body. Meta does
-    # not deliver that body to the user — real outbound send is not implemented yet.
     log.info("outbound_reply phone=%s grounding=%s reply=%r", phone, turn.grounding, turn.reply)
-    return {"status": "ok", "reply": turn.reply}
+    return "ok", turn.reply, regen
 
 
 @router.post("/conversations/messages", response_model=SendMessageOut, tags=["web-client"])

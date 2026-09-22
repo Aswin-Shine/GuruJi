@@ -1,5 +1,6 @@
 """Tests run against the real Postgres from docker compose (start `db` first).
 OpenAI is always mocked — no test spends money."""
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -10,6 +11,17 @@ from pathlib import Path
 # free to drift from the one that actually builds the corpus. scripts/ is a plain
 # directory, not a package, so it needs putting on the path explicitly.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+
+# Before anything imports app.config, which reads the environment once. Under
+# `docker compose run` the container carries the real .env, and without this a
+# test that forgot a mock would call real OpenAI, or send a REAL WhatsApp message.
+os.environ.update({
+    "OPENAI_API_KEY": "sk-test-not-a-real-key",
+    "PHOTO_QUESTIONS_ENABLED": "0",
+    "WHATSAPP_ACCESS_TOKEN": "",
+    "WHATSAPP_PHONE_NUMBER_ID": "",
+    "WHATSAPP_GRAPH_API_VERSION": "",
+})
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient

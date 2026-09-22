@@ -115,6 +115,28 @@ SECRET_KEY: str = os.environ.get("SECRET_KEY", DEFAULT_SECRET_KEY)
 WHATSAPP_APP_SECRET: str = os.environ.get("WHATSAPP_APP_SECRET", DEFAULT_WHATSAPP_APP_SECRET)
 WHATSAPP_VERIFY_TOKEN: str = os.environ.get("WHATSAPP_VERIFY_TOKEN", DEFAULT_WHATSAPP_VERIFY_TOKEN)
 
+# ---------------------------------------------------------------------------
+# Outbound WhatsApp (Meta Cloud API). All three must be set for a reply to leave
+# the server; with any of them empty, replies are computed, persisted and LOGGED
+# but never sent — the pre-outbound behaviour, kept so local dev and the test
+# suite need no Meta account. main.py warns at boot in either direction.
+#
+#   WHATSAPP_ACCESS_TOKEN      a permanent System User token, never the 24-hour
+#                              token the App Dashboard hands out on the API Setup
+#                              page. It sends messages AS the business — treat it
+#                              like SECRET_KEY.
+#   WHATSAPP_PHONE_NUMBER_ID   the sender's Phone number ID from API Setup (not the
+#                              phone number itself, not the WABA id).
+#   WHATSAPP_GRAPH_API_VERSION pinned explicitly, like every model string above.
+#                              Copy the "vNN.0" shown in the App Dashboard's curl
+#                              sample on the day of setup; there is no default
+#                              because a guessed version is how a send silently
+#                              starts failing on a Meta deprecation date.
+# ---------------------------------------------------------------------------
+WHATSAPP_ACCESS_TOKEN: str = os.environ.get("WHATSAPP_ACCESS_TOKEN", "")
+WHATSAPP_PHONE_NUMBER_ID: str = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "")
+WHATSAPP_GRAPH_API_VERSION: str = os.environ.get("WHATSAPP_GRAPH_API_VERSION", "")
+
 # Fails closed: with the bypass off, otp/verify rejects everything, because real OTP
 # delivery does not exist yet. Set DEV_OTP_BYPASS=1 for local dev only.
 DEV_OTP_BYPASS: bool = os.environ.get("DEV_OTP_BYPASS", "0") == "1"

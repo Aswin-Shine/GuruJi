@@ -1,7 +1,21 @@
 """Local harness: POSTs a mock WhatsApp-shaped payload with a valid HMAC signature.
 Full loop testable without any live Meta integration.
 
-Usage: python test_webhook.py "+919999900001" "Photosynthesis kya hota hai?"
+Usage: python scripts/send_test_webhook.py "+919999900001" "Photosynthesis kya hota hai?"
+
+The response body is an ACK — {"status": "accepted"} — not the reply. The reply is
+computed after the ack and delivered through Meta's Cloud API. To read it:
+
+  no outbound configured   docker compose logs api | grep outbound_reply
+  outbound configured      it arrives on the phone you passed as `phone`
+
+With WHATSAPP_ACCESS_TOKEN / PHONE_NUMBER_ID / GRAPH_API_VERSION set, this script
+therefore sends a REAL WhatsApp message to `phone`. Use one of the test number's
+verified recipients, and remember the 24h window: that phone must have messaged
+the business number first, or Meta rejects the send with error 131047.
+
+Env: BASE_URL (default http://localhost:8000), WHATSAPP_APP_SECRET, WAMID (pin it
+to a fixed value and re-run to see {"status": "duplicate"}).
 """
 import hashlib
 import hmac
