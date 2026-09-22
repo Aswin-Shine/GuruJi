@@ -73,7 +73,8 @@ A conversation id from a client is untrusted input. A request for someone else's
 - **Rate limiting**, 20 messages/minute per user, in-process.
 - **Daily spend circuit breaker** over an append-only `llm_spend` ledger, gating tutoring *and* background memory regeneration. Trips to a static fallback and pages `ALERT_WEBHOOK_URL` once per day.
 - **PIN brute-force lockout.** Five wrong parent-link PINs delete the link row, which invalidates the PIN itself (it is HMAC-derived from that row's id). A new invite means a new row, therefore a new PIN.
-- **Webhook idempotency.** A message id is claimed before processing and released if processing raises — a duplicate costs no LLM call, and a crash means Meta's retry reprocesses rather than the question vanishing.
+- **Webhook idempotency.** A message id is claimed before the ack and released if the background turn raises — a duplicate costs no LLM call and sends no second reply. Because the 200 goes out before the turn runs, a crash is reported to the student as the network-slow fallback rather than left to a Meta retry that will not come.
+- **Outbound is off by default.** With any of `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_GRAPH_API_VERSION` empty, nothing is sent and replies are only logged, so a fresh deployment cannot message anyone by accident. The app warns at boot when outbound is unconfigured outside local dev, and when it is configured *inside* local dev (a dev box with a real token sends real messages).
 
 ### Input handling
 
@@ -96,6 +97,7 @@ A conversation id from a client is untrusted input. A request for someone else's
 - Every placeholder is named in **one** message, so a misconfigured deploy fails once rather than three times.
 - The default values are named constants in `config.py`, not string literals repeated in `main.py` — a duplicated literal would let someone change a default and silently disarm the check that exists to catch it.
 - Secrets are never baked into images and never committed; `.env` is gitignored at the repository root.
+- `WHATSAPP_ACCESS_TOKEN` sends messages **as the business** to any WhatsApp number. Treat it like `SECRET_KEY`: a permanent System User token scoped to `whatsapp_business_messaging` and `whatsapp_business_management` only, rotated from Meta Business Settings if it ever leaks. There is no boot refusal on it because empty is a legitimate state (web-only pilot) — the control is that empty means *nothing is sent*.
 
 ### Provenance
 
@@ -153,6 +155,7 @@ Before anything faces the internet:
 - [ ] `APP_ENV` set to something other than `local`
 - [ ] `DEV_OTP_BYPASS=0` (and confirm the app boots, which proves the guard works)
 - [ ] `ALLOWED_PHONE_NUMBERS` populated with the pilot cohort
+- [ ] `WHATSAPP_ACCESS_TOKEN` is a permanent System User token (not the 24-hour dashboard token), and `WHATSAPP_PHONE_NUMBER_ID` / `WHATSAPP_GRAPH_API_VERSION` are set alongside it — all three or none. Terraform has no secrets store; these are hand-edited into `.env` on the instance over SSM.
 - [ ] `DAILY_SPEND_CAP_USD` sized for the actual cohort, and `ALERT_WEBHOOK_URL` set and tested
 - [ ] TLS terminator in front, HSTS verified
 - [ ] `ALLOWED_WEB_ORIGINS` set to exact origins, never `*`

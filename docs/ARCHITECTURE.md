@@ -31,6 +31,7 @@ The backend is one deployable organised as `app/modules/<domain>/`. Modules own 
 | `curriculum` | `curriculum_documents`, `curriculum_chunks` | nothing |
 | `memory` | `student_memory` | `student_profile` |
 | `safety` | `moderation_flags` | `student_profile` |
+| `whatsapp` | no tables — outbound send via Meta's Cloud API | nothing. Deliberately not inside `conversation`: `identity` will need the same sender for real OTP delivery, and identity is the root, so it cannot import conversation. |
 
 **Extraction order, if the team ever grows:** `ai_orchestrator` first (highest CPU and latency variance), then `curriculum` (independent release cadence from ingestion). `identity` and `conversation` stay in the core longest — they are on the critical path for every request, and splitting them first would add latency for no benefit.
 
@@ -94,7 +95,8 @@ The one retrieval miss in the current eval run matches this pattern: `'temperatu
 | Output token cap | `max_completion_tokens=500` on every call — a cost control, not only a formatting one. |
 | Query planner bound | 120 tokens, roughly 4× the longest legitimate output, so a runaway costs pennies. |
 | Latency tail bound | Retry is opt-out. Background memory summarisation does not retry; validation-failure regeneration is skipped past an 8-second deadline. A safe answer now beats a better one twenty seconds later. |
-| Webhook idempotency | A message id is *claimed* before processing and *released* if processing raises — so a crash means Meta's retry reprocesses, rather than the student's question being silently swallowed. |
+| Webhook idempotency | A message id is *claimed* before the ack and *released* if the background turn raises. The webhook returns 200 inside Meta's window and processes afterwards, so Meta rarely retries; a crash therefore sends the student the honest network-slow fallback rather than relying on a retry that will not come. The release keeps the claim table an honest record of what was processed, and covers the case where Meta never received the 200. |
+| Outbound delivery failure | Not a processing failure. The reply is already in `messages` before the send; a failed send is logged with Meta's error code named (24h window, rate limit, dead token) and the claim stays. One retry on transport error or 5xx, none on 4xx. |
 | Pilot allow-list | Checked before `get_or_create_user()`, which provisions an account on first contact. Without it, anyone who learns the number gets free billed tutoring. |
 
 **Known miscalibration.** The default `$5/day` cap suits roughly 20 pilot students. Estimated to break somewhere around 150–250 active students. [Guess — extrapolated from per-turn cost, not measured at that scale]
@@ -127,7 +129,7 @@ Stated rather than silently absent. All are appropriate at pilot scale and all b
 1. **Single Postgres instance, no replica.** Recovery is a manual restore with an untested RTO.
 2. **Single application container.** A crash is visible downtime; `restart: unless-stopped` is the entire self-healing story.
 3. **Single LLM provider.** No fallback — the degradation path is an honest failure message, not a different model.
-4. **Synchronous webhook.** Retrieval p50 alone (3.7 s) is already larger than Meta's acknowledgment window. The asynchronous ack pattern is Phase 2 and is the correct fix.
+4. **Background turn on the request container's thread pool.** The webhook acks immediately and runs the turn as a FastAPI `BackgroundTask` — no queue, per §6. If the container dies mid-turn the ack has already gone out, Meta will not retry, and that message is lost; the claim is released only if the *code* raises, not if the process is killed. Acceptable at pilot scale; the trigger for a real queue is measurably losing messages this way.
 5. **In-process rate limiter and PIN attempt counter.** Restart resets them. Correct for one container, wrong the moment there are two.
 6. **No boot guard on `SECRET_KEY` or `WHATSAPP_APP_SECRET`.** Both have working defaults, and this repository is public. See [SECURITY.md](SECURITY.md).
 
