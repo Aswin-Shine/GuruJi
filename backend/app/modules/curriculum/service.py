@@ -172,6 +172,28 @@ def format_for_prompt(chunks: list[Chunk], max_chars: int = 5600) -> str:
     return "\n---\n".join(parts)[:max_chars]
 
 
+def table_of_contents(db: Session, grade: int) -> str:
+    """Every ingested chapter of this class's books, one line per subject.
+
+    Retrieval only ever surfaces the top few chunks, so "which chapters are in my
+    book?" used to get 2-3 chapters (whatever happened to match) or, worse, names
+    recalled from the model's memory. The full list is small (~25 titles), so it is
+    handed to the tutor on every turn rather than routed specially. Only chapters
+    that have chunks are listed, for the same reason as subjects_by_grade()."""
+    rows = db.execute(
+        text(
+            "SELECT d.subject, d.chapter_no, d.title FROM curriculum_documents d "
+            "WHERE d.grade = :g AND EXISTS (SELECT 1 FROM curriculum_chunks c WHERE c.document_id = d.id) "
+            "ORDER BY d.subject, d.chapter_no"
+        ),
+        {"g": grade},
+    ).all()
+    by_subject: dict[str, list[str]] = {}
+    for subject, no, title in rows:
+        by_subject.setdefault(subject, []).append(f"{no}. {title}")
+    return "\n".join(f"{subj}: " + "; ".join(chs) for subj, chs in by_subject.items())
+
+
 def subjects_by_grade(db: Session) -> list[dict]:
     """What is actually ingested, per class.
 

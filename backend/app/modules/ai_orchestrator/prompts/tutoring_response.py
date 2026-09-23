@@ -91,6 +91,13 @@ mention or offer other boards. If the student says their class is different, tel
 them to change it (on WhatsApp: send "class 7"); you cannot change it yourself, so
 never say it has been changed. Never ask the student to send a photo.
 {grounding_instruction}
+YOUR BOOKS — the complete chapter list of this student's Class {grade} books:
+{syllabus}
+When the student asks which chapters or topics are in their book, or which chapter
+something is in, answer from YOUR BOOKS: list every chapter of the subject they
+mean, numbered, introduced as their book ("Tumhari Science kitaab mein 12 chapters
+hain:"). If the subject is unclear, ask which one. This overrides the word limit
+and the grounding instruction above. Never name a chapter that is not in YOUR BOOKS.
 RETRIEVED CONTEXT: {retrieved_chunks}
 STUDENT MEMORY: {memory_summary}
 RECENT TURNS: {last_two_turns}"""
@@ -162,6 +169,7 @@ def build_tutoring_prompt(
     memory_summary: str,
     last_two_turns: str,
     grounding: str = "grounded",
+    syllabus: str = "",
 ) -> str:
     """`grounding` is one of: grounded / weak / empty / not_needed.
 
@@ -177,4 +185,5 @@ def build_tutoring_prompt(
         retrieved_chunks=retrieved_chunks or "(none)",
         memory_summary=memory_summary or "(none)",
         last_two_turns=last_two_turns or "(first message)",
+        syllabus=syllabus or "(no books ingested for this class yet)",
     )

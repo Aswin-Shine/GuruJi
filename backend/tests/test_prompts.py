@@ -62,3 +62,12 @@ def test_bool_grounding_is_still_accepted():
 def test_unknown_grounding_falls_back_to_grounded_not_a_crash():
     p = build_tutoring_prompt(8, "NCERT", "ctx", "", "", grounding="nonsense")
     assert GROUNDED_INSTRUCTION in p
+
+
+def test_chapter_list_is_in_the_prompt_and_outranks_the_word_limit():
+    toc = "Science: 1. The Wonderful World of Science; 2. Diversity in the Living World"
+    p = build_tutoring_prompt(6, "NCERT", "", "", "", grounding="not_needed", syllabus=toc)
+    assert toc in p
+    assert "Never name a chapter that is not in YOUR BOOKS" in p
+    assert "overrides the word limit" in p
+    assert "(no books ingested" in build_tutoring_prompt(6, "NCERT", "", "", "")

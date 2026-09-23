@@ -288,3 +288,23 @@ def test_lowest_grade_floor_is_sane():
 def test_thresholds_are_ordered_and_come_from_config():
     """Guards the drift that made the old suite red: no test restates the number."""
     assert 0.0 < RAG_WEAK_THRESHOLD <= RAG_THRESHOLD < 1.0
+
+
+def test_table_of_contents_is_the_students_own_class_complete_and_ordered(db, seeded):
+    """'Which chapters are in my book?' used to be answered from the top few
+    retrieved chunks (2-3 chapters) or the model's memory. The tutor now gets the
+    full list for the student's own class — and only chapters that have content."""
+    from app.modules.curriculum import service as curriculum
+    db.execute(_t(
+        "INSERT INTO curriculum_documents (subject, grade, chapter_no, title) "
+        "VALUES ('Science', 8, 2, 'fix26-no-chunks-yet')"
+    ))
+    db.commit()
+    toc8 = curriculum.table_of_contents(db, 8)
+    assert "6. fix26-same-grade" in toc8
+    assert "fix26-lower-grade" not in toc8        # other classes' books are not theirs
+    assert "fix26-no-chunks-yet" not in toc8      # never promise a chapter GuruJi can't open
+    assert "3. fix26-lower-grade" in curriculum.table_of_contents(db, 6)
+    science = next(line for line in toc8.splitlines() if line.startswith("Science: "))
+    numbers = [int(part.split(".")[0]) for part in science.removeprefix("Science: ").split("; ")]
+    assert numbers == sorted(numbers)

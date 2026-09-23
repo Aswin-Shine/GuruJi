@@ -304,7 +304,10 @@ def orchestrate(
             excerpt = None
 
         # 6. Assemble prompt.
-        system = build_tutoring_prompt(grade, board, retrieved, memory_summary, last_two_turns, grounding)
+        system = build_tutoring_prompt(
+            grade, board, retrieved, memory_summary, last_two_turns, grounding,
+            syllabus=curriculum.table_of_contents(db, grade),
+        )
 
         # 7. Generate (max_tokens hard cap = cost control, not just formatting).
         text_out, p_tok, c_tok = llm.chat(CHAT_MODEL, system, message_text, MAX_OUTPUT_TOKENS)
