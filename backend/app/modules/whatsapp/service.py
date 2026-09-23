@@ -29,7 +29,9 @@ RETRY_DELAY_S = 1.5
 _ERROR_MEANING = {
     131047: "outside the 24h customer-service window — the student must message first",
     130429: "Meta throughput rate limit",
-    131026: "recipient is not a WhatsApp user, or not in the test number's recipient list",
+    131026: "message undeliverable — recipient is not on WhatsApp or cannot receive it",
+    131030: "recipient not in the test number's allowed list — add it under Step 1 'Try it out' → To",
+    131005: "token lacks permission — needs whatsapp_business_messaging AND the WABA assigned to the System User",
     190: "access token invalid or expired — regenerate the System User token",
 }
 
@@ -50,7 +52,7 @@ def send_text(to: str, body: str) -> bool:
         log.info("outbound_reply (log-only, WhatsApp outbound not configured) to=%s reply=%r", to, body)
         return False
 
-    url = f"{GRAPH_BASE}/{WHATSAPP_GRAPH_API_VERSION}/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    url = _messages_url()
     payload = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
@@ -58,7 +60,7 @@ def send_text(to: str, body: str) -> bool:
         "type": "text",
         "text": {"preview_url": False, "body": body[:MAX_TEXT_CHARS]},
     }
-    headers = {"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}"}
+    headers = _auth()
 
     for attempt in (1, 2):
         try:
@@ -85,6 +87,37 @@ def send_text(to: str, body: str) -> bool:
         )
         return False
     return False
+
+
+def mark_read_typing(message_id: str) -> None:
+    """Blue ticks plus "typing…" on the student's phone while the turn runs.
+
+    A turn takes 5-8s; without this the student sees nothing and resends. Meta
+    clears the indicator when the reply lands, or after 25s. Best effort: one
+    try, never raises, and never delays the turn for longer than a short timeout."""
+    if not configured() or not message_id:
+        return
+    payload = {
+        "messaging_product": "whatsapp",
+        "status": "read",
+        "message_id": message_id,
+        "typing_indicator": {"type": "text"},
+    }
+    try:
+        resp = httpx.post(_messages_url(), json=payload, headers=_auth(), timeout=3)
+        if resp.status_code >= 300:
+            code, meaning, detail = _explain(resp)
+            log.warning("typing indicator failed http=%s code=%s meaning=%s", resp.status_code, code, meaning)
+    except Exception as exc:
+        log.warning("typing indicator failed: %s", exc)
+
+
+def _messages_url() -> str:
+    return f"{GRAPH_BASE}/{WHATSAPP_GRAPH_API_VERSION}/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+
+
+def _auth() -> dict:
+    return {"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}"}
 
 
 def _explain(resp) -> tuple[int | None, str, str]:

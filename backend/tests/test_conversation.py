@@ -15,6 +15,7 @@ from app.modules.ai_orchestrator.orchestrator import FALLBACK_UNAVAILABLE, TurnR
 from app.modules.conversation import router as conv_router
 from app.modules.conversation import service
 from app.modules.whatsapp import service as whatsapp
+from app.modules.whatsapp.service import mark_read_typing as _real_mark_read_typing
 from tests.conftest import make_student
 
 
@@ -489,6 +490,103 @@ def test_web_and_whatsapp_resolve_to_the_same_account(client, db):
     convs = db.execute(_t("SELECT count(*) FROM conversations WHERE student_id = :s AND channel = 'whatsapp'"),
                        {"s": str(student.id)}).scalar_one()
     assert convs == 1
+
+
+def test_ignored_webhook_logs_its_shape_without_pii(client, caplog):
+    """An ignored POST must say WHY in the log (status receipt vs unknown message
+    shape), and must never log the phone number or message text."""
+    import logging
+    caplog.set_level(logging.INFO, logger="guruji.webhook")
+    status = {"entry": [{"changes": [{"field": "messages", "value": {
+        "statuses": [{"id": "wamid.s", "status": "delivered", "recipient_id": "919000000001"}]}}]}]}
+    odd = {"entry": [{"changes": [{"field": "messages", "value": {"messages": [
+        {"id": "wamid.o", "from_user_id": "IN.123", "type": "text", "text": {"body": "secret question"}}]}}]}]}
+    assert _post_webhook(client, status).json() == {"status": "ignored"}
+    assert _post_webhook(client, odd).json() == {"status": "ignored"}
+    logs = caplog.text
+    assert "keys=['statuses']" in logs
+    assert "unexpected shape keys=['from_user_id', 'id', 'text', 'type']" in logs
+    assert "919000000001" not in logs and "secret question" not in logs
+
+
+def _wa(client, phone, text, msg=None):
+    """Post one WhatsApp message and return every reply sent_text was asked to send."""
+    import uuid as _uuid
+    msg = msg or {"from": phone, "type": "text", "text": {"body": text}}
+    msg.setdefault("id", f"wamid.{_uuid.uuid4()}")
+    with patch.object(conv_router.whatsapp, "send_text") as mock_send, \
+         patch.object(service, "orchestrate", return_value=_turn("model-answer")) as mock_orch:
+        _post_webhook(client, {"entry": [{"changes": [{"value": {"messages": [msg]}}]}]})
+    return [c.args[1] for c in mock_send.call_args_list], mock_orch.call_count
+
+
+def test_greeting_confirms_class_without_a_model_call(client, db):
+    """'hi' must settle the class before any subject talk, and costs nothing."""
+    _, student, _ = make_student(db, grade=8)
+    phone = _phone_of(db, student)
+    for hello in ("hi", "Hii!", "hello guruji", "Namaste 🙏", "good morning"):
+        sent, model_calls = _wa(client, phone, hello)
+        assert sent == [conv_router.GREET.format(grade=8)], hello
+        assert model_calls == 0
+    # A real question that merely starts with "hi" still goes to the tutor.
+    sent, model_calls = _wa(client, phone, "hi, pressure kya hota hai?")
+    assert sent == ["model-answer"] and model_calls == 1
+
+
+def test_class_command_really_changes_the_class(client, db):
+    """The model used to reply 'Class 6 set!' while nothing changed."""
+    _, student, _ = make_student(db, grade=8)
+    phone = _phone_of(db, student)
+    sent, model_calls = _wa(client, phone, "Class 6 CBSE")
+    assert sent == [conv_router.CLASS_CHANGED.format(grade=6)] and model_calls == 0
+    db.expire_all()
+    assert db.execute(_t("SELECT grade FROM students WHERE id = :s"), {"s": str(student.id)}).scalar_one() == 6
+    for text_in, grade in (("class 7th", 7), ("meri class 9 hai", 9)):
+        assert _wa(client, phone, text_in)[0] == [conv_router.CLASS_CHANGED.format(grade=grade)]
+    # A bare number mid-conversation is an answer to GuruJi's question, not a class change.
+    sent, model_calls = _wa(client, phone, "6")
+    assert sent == ["model-answer"] and model_calls == 1
+    assert db.execute(_t("SELECT grade FROM students WHERE id = :s"), {"s": str(student.id)}).scalar_one() == 9
+    # Out of range is not a command.
+    assert _wa(client, phone, "class 12")[1] == 1
+
+
+def test_onboarding_accepts_class_phrasings(client, db):
+    for answer, grade in (("class 8", 8), ("7th", 7), ("10", 10)):
+        fresh = _fresh_phone()
+        with patch.object(conv_router, "ALLOWED_PHONE_NUMBERS", []):
+            assert _wa(client, fresh, "hi")[0] == [conv_router.ONBOARD_ASK_GRADE]
+            assert _wa(client, fresh, answer)[0] == [conv_router.ONBOARD_DONE.format(grade=grade)]
+
+
+def test_photo_or_voice_gets_a_type_it_reply_and_reactions_are_ignored(client, db):
+    _, student, _ = make_student(db)
+    phone = _phone_of(db, student)
+    for media in ({"type": "image", "image": {"id": "m1", "caption": "q3"}},
+                  {"type": "audio", "audio": {"id": "m2", "voice": True}},
+                  {"type": "sticker", "sticker": {"id": "m3"}}):
+        sent, model_calls = _wa(client, phone, None, {"from": phone, **media})
+        assert sent == [conv_router.NOT_TEXT] and model_calls == 0
+    sent, model_calls = _wa(client, phone, None, {"from": phone, "type": "reaction",
+                                                  "reaction": {"message_id": "x", "emoji": "👍"}})
+    assert sent == [] and model_calls == 0
+
+
+def test_typing_indicator_shape_and_never_raises():
+    """Blue ticks + typing while the 5-8s turn runs; a Meta failure must not
+    break the turn."""
+    post = MagicMock(return_value=MagicMock(status_code=200))
+    a, b, c, d, e = _outbound_configured(post)
+    with a, b, c, d, e:
+        _real_mark_read_typing("wamid.T")
+    args, kwargs = post.call_args
+    assert args[0] == "https://graph.facebook.com/v0.0/123/messages"
+    assert kwargs["json"] == {"messaging_product": "whatsapp", "status": "read",
+                              "message_id": "wamid.T", "typing_indicator": {"type": "text"}}
+    a, b, c, d, e = _outbound_configured(MagicMock(side_effect=httpx.ConnectError("down")))
+    with a, b, c, d, e:
+        _real_mark_read_typing("wamid.T")  # must not raise
+    _real_mark_read_typing("wamid.T")  # unconfigured: no-op, no network
 
 
 def test_send_text_never_raises_even_when_the_client_explodes():

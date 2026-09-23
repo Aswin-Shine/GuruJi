@@ -25,6 +25,11 @@ def create_student(db: Session, user_id: uuid.UUID, grade: int, board: str, pref
     return student
 
 
+def set_grade(db: Session, student: Student, grade: int) -> None:
+    student.grade = grade
+    db.commit()
+
+
 def parent_is_linked(db: Session, parent_user_id: uuid.UUID, student_id: uuid.UUID) -> bool:
     """Verified link required — an unverified row grants nothing."""
     link = db.execute(

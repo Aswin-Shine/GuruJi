@@ -37,6 +37,14 @@ def _schema():
     init_db(retries=3)
 
 
+@pytest.fixture(autouse=True)
+def _no_typing_indicator(monkeypatch):
+    """The read/typing call is a second httpx.post per turn; tests that count sends
+    would all have to discount it. Its own test calls the real function directly."""
+    from app.modules.whatsapp import service as whatsapp
+    monkeypatch.setattr(whatsapp, "mark_read_typing", lambda message_id: None)
+
+
 @pytest.fixture()
 def db():
     session = SessionLocal()

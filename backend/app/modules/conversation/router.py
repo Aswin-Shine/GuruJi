@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import uuid
 
 from fastapi import (
@@ -51,6 +52,29 @@ ONBOARD_DONE = "Class {grade} — set! Ab koi bhi doubt poochho, main hoon na. �
 TOO_LONG = "Arre, itna lamba message! Thoda chhota karke bhejo — ek sawaal ek baar. 🙏"
 MAX_INBOUND_CHARS = 2000  # same ceiling send_message() already enforces
 NOT_INVITED = "Namaste! GuruJi abhi sirf pilot students ke liye hai. 🙏"
+GREET = ("Namaste! 🙏 Main GuruJi hoon. Tum *Class {grade}* mein ho na?\n"
+         "Class alag hai toh 'class 7' jaise bhejo. Nahi toh apna sawaal poochho! 📚")
+CLASS_CHANGED = "Class {grade} — set! Ab Class {grade} ki kitaab se padhenge. Apna sawaal poochho! 📚"
+NOT_TEXT = "Abhi main sirf typed message samajh pata hoon 🙏 Apna sawaal type karke bhejo."
+
+# Non-text messages that deserve a "please type it" reply. Reactions, read
+# receipts and system events are NOT here: answering an emoji reaction is noise.
+_MEDIA_TYPES = {"image", "audio", "video", "document", "sticker", "location", "contacts"}
+# A class change needs the word "class": mid-conversation a bare "7" is an answer
+# to GuruJi's own question. Tolerates "class 7th", "meri class 7 hai", "class 6 cbse".
+_CLASS_CMD = re.compile(
+    r"^\s*(?:meri\s+|my\s+)?(?:class|kaksha)\s*(10|[5-9])(?:th)?"
+    r"(?:\s+(?:cbse|ncert|board|hai|me|mein|mai|main))*\s*[.!]*\s*$", re.I)
+# During onboarding, GuruJi has just asked for the class, so a bare number is the answer.
+_BARE_GRADE = re.compile(r"^\s*(10|[5-9])(?:th)?\s*[.!]*\s*$", re.I)
+_GREETING = re.compile(
+    r"^\s*(?:hi+|hii+|hello+|hel+o|hlo|hey+|namaste|namaskar|hola|yo|gm|good\s*(?:morning|afternoon|evening))"
+    r"(?:\s+(?:guru\s*ji|guruji|sir|bhai|dost|there))?[\W_]*$", re.I)
+
+
+def _parse_grade(text_in: str, allow_bare: bool) -> int | None:
+    m = _CLASS_CMD.match(text_in) or (_BARE_GRADE.match(text_in) if allow_bare else None)
+    return int(m.group(1)) if m else None
 
 
 @router.get("/webhooks/whatsapp")
@@ -71,13 +95,14 @@ def _verify_signature(body: bytes, signature_header: str) -> bool:
     return hmac.compare_digest(signature_header.removeprefix("sha256="), expected)
 
 
-def _extract_messages(payload: dict) -> list[tuple[str, str, str | None]]:
-    """Every text message in the payload as (phone, text, whatsapp_message_id).
+def _extract_messages(payload: dict) -> list[tuple[str, str | None, str | None]]:
+    """Every student message in the payload as (phone, text, whatsapp_message_id).
 
     Meta may batch several messages across entries/changes into one POST, so all of
-    them are walked — reading only the first would drop the rest silently. Status
-    events and non-text messages are skipped. A missing message id is NOT a
-    rejection — dedupe is simply skipped for that message."""
+    them are walked — reading only the first would drop the rest silently. Media
+    (photo, voice note, sticker…) comes through with text=None so the student is
+    told to type instead of hearing nothing. Status events and reactions are
+    skipped. A missing message id is NOT a rejection — dedupe is simply skipped."""
     out = []
     for entry in payload.get("entry") or []:
         for change in entry.get("changes") or []:
@@ -85,9 +110,27 @@ def _extract_messages(payload: dict) -> list[tuple[str, str, str | None]]:
                 try:
                     if msg.get("type") == "text":
                         out.append((msg["from"], msg["text"]["body"], msg.get("id")))
+                    elif msg.get("type") in _MEDIA_TYPES:
+                        out.append((msg["from"], None, msg.get("id")))
                 except (KeyError, TypeError, AttributeError):
+                    # Keys only, never values: this is the line that explains a
+                    # payload shape change (e.g. Meta's username/BSUID rollout).
+                    log.warning("webhook text message skipped, unexpected shape keys=%s",
+                                sorted(msg) if isinstance(msg, dict) else type(msg).__name__)
                     continue
     return out
+
+
+def _describe_payload(payload: dict) -> str:
+    """Shape of an ignored webhook for the log — field names, value keys and
+    message types. No phone numbers, no message text."""
+    parts = []
+    for entry in payload.get("entry") or []:
+        for change in entry.get("changes") or []:
+            value = change.get("value") or {}
+            types = [m.get("type") for m in value.get("messages") or [] if isinstance(m, dict)]
+            parts.append(f"field={change.get('field')} keys={sorted(value)} message_types={types}")
+    return "; ".join(parts) or f"top_level_keys={sorted(payload)}"
 
 
 def _claim_message(db: Session, message_id: str) -> bool:
@@ -156,6 +199,9 @@ def webhook_inbound(
         return {"status": "ignored"}
     messages = _extract_messages(payload)
     if not messages:
+        # Status receipts land here routinely; logged so a message that SHOULD have
+        # been answered is diagnosable instead of vanishing without a trace.
+        log.info("webhook ignored: %s", _describe_payload(payload))
         return {"status": "ignored"}
 
     accepted = 0
@@ -173,7 +219,7 @@ def webhook_inbound(
     return {"status": "accepted" if accepted else "duplicate", "accepted": accepted}
 
 
-def _process_inbound_task(phone: str, text_in: str, message_id: str | None) -> None:
+def _process_inbound_task(phone: str, text_in: str | None, message_id: str | None) -> None:
     """The whole turn, after the ack. Runs on the thread pool once the 200 is sent.
 
     Opens its OWN session: get_db() has closed the request's by the time a
@@ -181,6 +227,8 @@ def _process_inbound_task(phone: str, text_in: str, message_id: str | None) -> N
     the server log after the response, so it is handled in full: the claim is
     released, the student gets the honest network-slow fallback, and the memory
     regeneration is simply skipped."""
+    if message_id is not None:
+        whatsapp.mark_read_typing(message_id)  # never raises
     db = SessionLocal()
     try:
         status, reply, regen = _process_inbound(db, phone, text_in)
@@ -207,14 +255,14 @@ def _process_inbound_task(phone: str, text_in: str, message_id: str | None) -> N
             log.exception("memory regeneration failed student_id=%s", regen.student_id)
 
 
-def _process_inbound(db: Session, phone: str, text_in: str) -> tuple[str, str | None, service.RegenArgs | None]:
+def _process_inbound(db: Session, phone: str, text_in: str | None) -> tuple[str, str | None, service.RegenArgs | None]:
     """One inbound turn. Returns (status, reply_or_None, regen_args_or_None).
 
     Every branch returns a reply for the caller to deliver — onboarding prompts and
     refusals included — because on WhatsApp there is no other channel to say it on.
     Nothing here raises for a product reason; a raise means a genuine fault."""
-    # Same length ceiling send_message() enforces.
-    if not text_in.strip() or len(text_in) > MAX_INBOUND_CHARS:
+    # Same length ceiling send_message() enforces. None = a photo/voice/sticker.
+    if text_in is not None and (not text_in.strip() or len(text_in) > MAX_INBOUND_CHARS):
         return "rejected", TOO_LONG, None
 
     # Checked BEFORE get_or_create_user, which provisions an account on first contact,
@@ -229,16 +277,34 @@ def _process_inbound(db: Session, phone: str, text_in: str) -> tuple[str, str | 
     if service.rate_limited(user.id):
         return "rate_limited", "Thoda dheere, dost! Ek minute ruk ke phir poochho. 😅", None
 
+    if text_in is None:
+        return "not_text", NOT_TEXT, None
+
     student = profile.get_student_by_user(db, user.id)
     if student is None:
         # Deliberate simplification: onboarding collects ONLY the class, because grade
         # is the one field retrieval requires to function. A multi-question flow needs
         # per-user turn-state tracking, which is not built yet.
-        stripped = text_in.strip()
-        if stripped.isdigit() and 5 <= int(stripped) <= 10:
-            student = profile.create_student(db, user.id, int(stripped), "NCERT", "hinglish")
+        grade = _parse_grade(text_in, allow_bare=True)
+        if grade is not None:
+            student = profile.create_student(db, user.id, grade, "NCERT", "hinglish")
             return "onboarded", ONBOARD_DONE.format(grade=student.grade), None
         return "onboarding", ONBOARD_ASK_GRADE, None
+
+    # Deterministic, no model call: the class must be settled before any subject
+    # talk, and a greeting costs ~7s and a paid call when it goes to the model.
+    if _GREETING.match(text_in):
+        return "greeted", GREET.format(grade=student.grade), None
+
+    # The model cannot change the profile, so it must never be the one to handle
+    # this — it used to reply "Class 6 set!" while nothing changed.
+    grade = _parse_grade(text_in, allow_bare=False)
+    if grade is not None:
+        if grade != student.grade:
+            profile.set_grade(db, student, grade)
+            # Fresh session: the old one's history was taught at the old level.
+            service.close_open_sessions(db, student.id, "whatsapp")
+        return "class_changed", CLASS_CHANGED.format(grade=grade), None
 
     turn, _, regen = service.handle_student_message(db, student, "whatsapp", text_in)
     log.info("outbound_reply phone=%s grounding=%s reply=%r", phone, turn.grounding, turn.reply)
